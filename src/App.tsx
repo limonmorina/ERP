@@ -1,3 +1,7 @@
+/**
+ * Top-level route map for the ERP UI.
+ * All pages share AppLayout (sidebar + shell); unknown paths redirect to the dashboard.
+ */
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppLayout } from './components/Layout';
 import { DashboardPage } from './pages/Dashboard';

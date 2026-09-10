@@ -1,3 +1,7 @@
+/**
+ * Tailwind theme for HSM Furniture ERP.
+ * Extends brand (green), ink (warm neutrals), accent (terracotta), and display/sans/mono fonts.
+ */
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],

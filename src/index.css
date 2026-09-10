@@ -1,7 +1,13 @@
+/**
+ * Global styles for the ERP renderer.
+ * Tailwind layers plus shared component utilities and A4 invoice print rules.
+ */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* --- Design tokens / page chrome --- */
 :root {
   color-scheme: light;
 }
@@ -15,6 +21,7 @@
 
   body {
     @apply font-sans bg-ink-50 text-ink-950;
+    /* Soft brand/accent washes behind content panels */
     background-image:
       radial-gradient(ellipse 80% 50% at 0% -20%, rgba(79, 119, 96, 0.12), transparent),
       radial-gradient(ellipse 60% 40% at 100% 0%, rgba(196, 92, 38, 0.08), transparent);
@@ -27,6 +34,7 @@
   }
 }
 
+/* --- Reusable UI utilities (buttons, fields, panels, tables) --- */
 @layer components {
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition
@@ -88,13 +96,14 @@
     @apply bg-brand-50/40;
   }
 
+  /* Preserve status row tint on hover (Orders table) */
   table.data tr.bg-emerald-50\/90:hover td,
   table.data tr.bg-amber-50\/90:hover td {
     @apply bg-transparent;
   }
 }
 
-/* A4 invoice print styles */
+/* --- A4 invoice print: hide chrome, show only invoice sheet --- */
 @media print {
   body * {
     visibility: hidden;

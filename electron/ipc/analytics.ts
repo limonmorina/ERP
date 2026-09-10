@@ -1,8 +1,12 @@
+// IPC handlers for dashboard analytics in HSM Furniture ERP.
+// Aggregates monthly revenue, profit, inventory worth, top sellers, and discount history.
+
 import { ipcMain } from 'electron';
 import { getDatabase } from '../database/db';
 import { inventoryLineValue } from '../lib/setBreakdown';
 import type { DashboardMetrics, InventoryItem, OrderStatus } from '../types';
 
+/** Register analytics IPC channels on the main process. */
 export function registerAnalyticsHandlers(): void {
   ipcMain.handle('analytics:dashboard', (): DashboardMetrics => {
     const db = getDatabase();
@@ -35,6 +39,7 @@ export function registerAnalyticsHandlers(): void {
       Pick<InventoryItem, 'cost_price' | 'stock_sets' | 'set_format' | 'leftover_pieces'>
     >;
 
+    // Complete sets at cost plus pro-rata leftover piece value
     const inventoryWorth = inventoryRows.reduce(
       (sum, row) =>
         sum +
@@ -61,6 +66,7 @@ export function registerAnalyticsHandlers(): void {
       )
       .all() as Array<{ name: string; qty: number; revenue: number }>;
 
+    // Pending deliveries first, then delivered, then returned
     const deliveries = db
       .prepare(
         `SELECT o.order_number, c.name AS customer_name, o.status,

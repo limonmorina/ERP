@@ -1,4 +1,7 @@
-import { app, BrowserWindow, shell } from 'electron';
+// Electron main process entry for HSM Furniture ERP.
+// Owns the BrowserWindow lifecycle, SQLite boot, IPC registration, and quit-time backup.
+
+import { app, BrowserWindow, dialog, shell } from 'electron';
 import path from 'path';
 import { initDatabase, closeDatabase } from './database/db';
 import { backupDatabase } from './database/backup';
@@ -15,6 +18,7 @@ process.env.VITE_PUBLIC = app.isPackaged
 let mainWindow: BrowserWindow | null = null;
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 
+/** Create the primary application window with a secure preload bridge. */
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -27,10 +31,12 @@ function createWindow(): void {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false, // needed for better-sqlite3 path resolution via IPC only
+      // Needed for better-sqlite3 path resolution via IPC only
+      sandbox: false,
     },
   });
 
+  // Open external links in the OS browser instead of a new Electron window
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
@@ -45,13 +51,25 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  initDatabase();
+  try {
+    initDatabase();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    dialog.showErrorBox(
+      'HSM Furniture ERP - database error',
+      `Could not open the database.\n\nClose any other running copy of the app (including npm run electron:dev), then try again.\n\n${message}`
+    );
+    app.quit();
+    return;
+  }
+
   registerInventoryHandlers();
   registerOrderHandlers();
   registerInvoiceHandlers();
   registerAnalyticsHandlers();
   createWindow();
 
+  // macOS: recreate a window when the dock icon is clicked and none remain
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -66,6 +84,7 @@ app.on('before-quit', () => {
   closeDatabase();
 });
 
+// Keep the app alive on macOS when all windows are closed (standard Electron pattern)
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });

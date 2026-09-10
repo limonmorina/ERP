@@ -1,6 +1,13 @@
+/**
+ * Inventory management page: list/search stock, create/edit/delete items,
+ * and preview how selling a custom set format would break full sets into leftovers.
+ *
+ * Major blocks: load, create/edit form submit, set-breakdown preview, table rendering.
+ */
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Plus, RefreshCw, Search } from 'lucide-react';
+import { ImagePlus, Pencil, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { SetBreakdownWarning } from '../components/SetBreakdownWarning';
+import { ProductThumb } from '../components/ProductThumb';
 import {
   formatEuro,
   formatLeftovers,
@@ -17,6 +24,7 @@ const emptyForm = {
   category_id: 0,
   set_format: '3-3-1',
   stock_sets: 1,
+  leftover_pieces: '',
   cost_price: 0,
   selling_price: 0,
   notes: '',
@@ -26,6 +34,7 @@ export function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -33,12 +42,18 @@ export function InventoryPage() {
   const [previewFormat, setPreviewFormat] = useState('3-3-3-1');
   const [previewQty, setPreviewQty] = useState(1);
   const [preview, setPreview] = useState<SetBreakdownPreview | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [imageMime, setImageMime] = useState<string | undefined>(undefined);
+  const [existingImagePath, setExistingImagePath] = useState<string>('');
+  const [clearImage, setClearImage] = useState(false);
 
   const categoryMap = useMemo(
     () => Object.fromEntries(categories.map((c) => [c.id, c.name])),
     [categories]
   );
 
+  // Client-side filter across name, SKU, notes, category, and set format.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return items;
@@ -52,9 +67,10 @@ export function InventoryPage() {
     );
   }, [items, search]);
 
+  // --- Load ---
   async function load() {
     if (!hasErpBridge()) {
-      setError('Ura e Electron nuk është aktive — hapni me npm run electron:dev');
+      setError('Ura e Electron nuk është aktive - hapni me npm run electron:dev');
       return;
     }
     setError(null);
@@ -76,25 +92,140 @@ export function InventoryPage() {
     );
   }, []);
 
+  function resetImageState() {
+    setImagePreview(null);
+    setImageBase64(null);
+    setImageMime(undefined);
+    setExistingImagePath('');
+    setClearImage(false);
+  }
+
+  function openCreate() {
+    setEditingId(null);
+    setForm({ ...emptyForm, category_id: categories[0]?.id || 0 });
+    resetImageState();
+    setShowForm(true);
+    setError(null);
+  }
+
+  async function openEdit(item: InventoryItem) {
+    setEditingId(item.id);
+    setForm({
+      sku: item.sku,
+      name: item.name,
+      category_id: item.category_id,
+      set_format: item.set_format,
+      stock_sets: item.stock_sets,
+      leftover_pieces: item.leftover_pieces || '',
+      cost_price: item.cost_price,
+      selling_price: item.selling_price,
+      notes: item.notes || '',
+    });
+    setImageBase64(null);
+    setImageMime(undefined);
+    setClearImage(false);
+    setExistingImagePath(item.image_path || '');
+    setImagePreview(null);
+    if (item.image_path && hasErpBridge()) {
+      const data = await window.erp.inventory.getImage({
+        image_path: item.image_path,
+        id: item.id,
+      });
+      setImagePreview(data);
+    }
+    setShowForm(true);
+    setError(null);
+  }
+
+  function closeForm() {
+    setShowForm(false);
+    setEditingId(null);
+    setForm({ ...emptyForm, category_id: categories[0]?.id || 0 });
+    resetImageState();
+  }
+
+  async function onPickImage(file: File | null) {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setError('Zgjidhni një skedar foto (JPG, PNG, WEBP)');
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setError('Fotoja duhet të jetë nën 8MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      setImagePreview(result);
+      setImageBase64(result);
+      setImageMime(file.type);
+      setClearImage(false);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // --- Form submit (create or update) ---
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!hasErpBridge()) return;
     try {
-      await window.erp.inventory.create({
-        ...form,
+      const leftover = form.leftover_pieces.trim();
+      if (leftover) {
+        JSON.parse(leftover);
+      }
+
+      const payload = {
+        sku: form.sku,
+        name: form.name,
         category_id: Number(form.category_id),
+        set_format: form.set_format,
         stock_sets: Number(form.stock_sets),
+        leftover_pieces: leftover || '',
         cost_price: Number(form.cost_price),
         selling_price: Number(form.selling_price),
-      });
-      setForm({ ...emptyForm, category_id: categories[0]?.id || 0 });
-      setShowForm(false);
+        notes: form.notes,
+        ...(imageBase64
+          ? { image_base64: imageBase64, image_mime: imageMime }
+          : {}),
+        ...(editingId != null && clearImage ? { clear_image: true } : {}),
+      };
+
+      if (editingId != null) {
+        await window.erp.inventory.update({ id: editingId, ...payload });
+      } else {
+        await window.erp.inventory.create(payload);
+      }
+
+      closeForm();
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nuk u ruajt artikulli');
+      setError(
+        err instanceof Error
+          ? err.message
+          : editingId != null
+            ? 'Nuk u përditësua artikulli'
+            : 'Nuk u ruajt artikulli'
+      );
     }
   }
 
+  async function removeItem(item: InventoryItem) {
+    if (!hasErpBridge()) return;
+    const ok = window.confirm(
+      `Fshi artikullin "${item.name}" nga inventari?\n\nNuk fshihet nga historiku i porosive, por nuk shfaqet më në listë.`
+    );
+    if (!ok) return;
+    try {
+      await window.erp.inventory.remove(item.id);
+      if (editingId === item.id) closeForm();
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nuk u fshi artikulli');
+    }
+  }
+
+  // --- Set-breakdown preview (dry-run stock impact) ---
   async function runPreview() {
     if (!hasErpBridge() || !previewItemId) return;
     try {
@@ -115,7 +246,7 @@ export function InventoryPage() {
         <div>
           <h2 className="text-3xl font-semibold">Inventari</h2>
           <p className="mt-1 text-ink-600">
-            Specifikimet shkruhen te përshkrimi · stoku tregon sete të plota + mbetje
+            Shto, ndrysho stokun / çmimet, ose fshi artikuj · mbetjet ruhen si JSON
           </p>
         </div>
         <div className="flex gap-2">
@@ -123,11 +254,7 @@ export function InventoryPage() {
             <RefreshCw size={16} />
             Rifresko
           </button>
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={() => setShowForm((v) => !v)}
-          >
+          <button type="button" className="btn-primary" onClick={openCreate}>
             <Plus size={16} />
             Shto artikull
           </button>
@@ -153,8 +280,14 @@ export function InventoryPage() {
         </div>
       )}
 
+      {/* Create / edit form */}
       {showForm && (
         <form onSubmit={onSubmit} className="panel grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
+          <div className="md:col-span-2 xl:col-span-4">
+            <h3 className="text-lg font-semibold">
+              {editingId != null ? 'Ndrysho artikullin' : 'Artikull i ri'}
+            </h3>
+          </div>
           <div className="field">
             <label htmlFor="sku">Kodi (SKU)</label>
             <input
@@ -220,6 +353,16 @@ export function InventoryPage() {
             />
           </div>
           <div className="field">
+            <label htmlFor="leftover_pieces">Mbetje (JSON, opsionale)</label>
+            <input
+              id="leftover_pieces"
+              className="input font-mono text-xs"
+              value={form.leftover_pieces}
+              onChange={(e) => setForm({ ...form, leftover_pieces: e.target.value })}
+              placeholder='p.sh. {"3":1,"1":2}'
+            />
+          </div>
+          <div className="field">
             <label htmlFor="cost_price">Kostoja e furnitorit (€)</label>
             <input
               id="cost_price"
@@ -259,21 +402,64 @@ export function InventoryPage() {
               placeholder="Materiali, ngjyra, dimensionet, specifikimet…"
             />
           </div>
+          <div className="field md:col-span-2 xl:col-span-4">
+            <label htmlFor="product-photo">Foto e produktit</label>
+            <p className="mb-2 text-xs text-ink-500">
+              Ndihmon kur artikujt kanë të njëjtin emër por duken ndryshe (JPG/PNG, max 8MB).
+            </p>
+            <div className="flex flex-wrap items-center gap-4">
+              {imagePreview && !clearImage ? (
+                <img
+                  src={imagePreview}
+                  alt="Parapamje"
+                  className="h-24 w-24 rounded-md object-cover ring-1 ring-ink-200"
+                />
+              ) : (
+                <div className="flex h-24 w-24 items-center justify-center rounded-md bg-ink-100 text-ink-400">
+                  <ImagePlus size={22} />
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <label className="btn-secondary cursor-pointer">
+                  <ImagePlus size={16} />
+                  Zgjidh foto
+                  <input
+                    id="product-photo"
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    className="hidden"
+                    onChange={(e) => onPickImage(e.target.files?.[0] || null)}
+                  />
+                </label>
+                {(imagePreview || existingImagePath) && !clearImage && (
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => {
+                      setClearImage(true);
+                      setImagePreview(null);
+                      setImageBase64(null);
+                    }}
+                  >
+                    <X size={16} />
+                    Hiq foton
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
           <div className="flex gap-2 md:col-span-2 xl:col-span-4">
             <button type="submit" className="btn-primary">
-              Ruaj në inventar
+              {editingId != null ? 'Ruaj ndryshimet' : 'Ruaj në inventar'}
             </button>
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={() => setShowForm(false)}
-            >
+            <button type="button" className="btn-ghost" onClick={closeForm}>
               Anulo
             </button>
           </div>
         </form>
       )}
 
+      {/* Set-breakdown preview panel */}
       <section className="panel p-5">
         <h3 className="text-lg font-semibold">Parashikimi i ndarjes së setit</h3>
         <p className="mt-1 text-sm text-ink-600">
@@ -352,10 +538,12 @@ export function InventoryPage() {
         )}
       </section>
 
+      {/* Inventory table */}
       <div className="table-wrap">
         <table className="data">
           <thead>
             <tr>
+              <th>Foto</th>
               <th>SKU</th>
               <th>Emri</th>
               <th>Kategoria</th>
@@ -365,12 +553,13 @@ export function InventoryPage() {
               <th>Kostoja</th>
               <th>Lista</th>
               <th>Margjina</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={9} className="text-ink-500">
+                <td colSpan={11} className="text-ink-500">
                   {items.length === 0
                     ? 'Nuk ka artikuj ende.'
                     : 'Asnjë rezultat për kërkimin.'}
@@ -386,6 +575,14 @@ export function InventoryPage() {
                 const leftovers = formatLeftovers(item.leftover_pieces);
                 return (
                   <tr key={item.id}>
+                    <td>
+                      <ProductThumb
+                        imagePath={item.image_path}
+                        itemId={item.id}
+                        alt={item.name}
+                        size={44}
+                      />
+                    </td>
                     <td className="font-mono text-xs">{item.sku}</td>
                     <td>
                       <div className="font-medium">{item.name}</div>
@@ -399,7 +596,7 @@ export function InventoryPage() {
                     <td className="font-mono">{item.set_format}</td>
                     <td className="font-mono font-semibold">{item.stock_sets}</td>
                     <td className="font-mono text-xs text-ink-600">
-                      {leftovers || '—'}
+                      {leftovers || '-'}
                     </td>
                     <td>{formatEuro(item.cost_price)}</td>
                     <td>{formatEuro(item.selling_price)}</td>
@@ -412,6 +609,26 @@ export function InventoryPage() {
                       <span className="ml-1 text-xs text-ink-500">
                         ({formatPercent(percent)})
                       </span>
+                    </td>
+                    <td>
+                      <div className="flex justify-end gap-1">
+                        <button
+                          type="button"
+                          className="btn-ghost !px-2 !py-1"
+                          title="Ndrysho"
+                          onClick={() => openEdit(item)}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-ghost !px-2 !py-1 text-accent"
+                          title="Fshi"
+                          onClick={() => removeItem(item)}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

@@ -1,8 +1,28 @@
+// IPC handlers for inventory and categories in HSM Furniture ERP.
+// CRUD for stock items, soft-delete, product photos, and set-breakdown preview/apply.
+
 import { ipcMain } from 'electron';
 import { getDatabase } from '../database/db';
 import { calculateSetBreakdown, serializeLeftovers } from '../lib/setBreakdown';
+import {
+  deleteProductImage,
+  productImageToDataUrl,
+  saveProductImageFromBase64,
+} from '../lib/productImages';
 import type { InventoryItem, Category, SetBreakdownPreview } from '../types';
 
+function fetchItem(id: number | bigint): InventoryItem {
+  return getDatabase()
+    .prepare(
+      `SELECT i.*, c.name AS category_name
+       FROM inventory_items i
+       JOIN categories c ON c.id = i.category_id
+       WHERE i.id = ?`
+    )
+    .get(id) as InventoryItem;
+}
+
+/** Register category and inventory IPC channels on the main process. */
 export function registerInventoryHandlers(): void {
   ipcMain.handle('categories:list', (): Category[] => {
     return getDatabase().prepare('SELECT * FROM categories ORDER BY name').all() as Category[];
@@ -42,16 +62,25 @@ export function registerInventoryHandlers(): void {
         category_id: number;
         set_format: string;
         stock_sets: number;
+        leftover_pieces?: string;
         cost_price: number;
         selling_price: number;
         notes?: string;
+        image_path?: string;
+        image_base64?: string;
+        image_mime?: string;
       }
     ): InventoryItem => {
+      let imagePath = payload.image_path?.trim() || '';
+      if (payload.image_base64) {
+        imagePath = saveProductImageFromBase64(payload.image_base64, payload.image_mime);
+      }
+
       const result = getDatabase()
         .prepare(
           `INSERT INTO inventory_items
-           (sku, name, category_id, set_format, stock_sets, cost_price, selling_price, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+           (sku, name, category_id, set_format, stock_sets, leftover_pieces, cost_price, selling_price, notes, image_path)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           payload.sku.trim(),
@@ -59,18 +88,13 @@ export function registerInventoryHandlers(): void {
           payload.category_id,
           payload.set_format.trim(),
           payload.stock_sets,
+          payload.leftover_pieces?.trim() || '',
           payload.cost_price,
           payload.selling_price,
-          payload.notes?.trim() ?? ''
+          payload.notes?.trim() ?? '',
+          imagePath
         );
-      return getDatabase()
-        .prepare(
-          `SELECT i.*, c.name AS category_name
-           FROM inventory_items i
-           JOIN categories c ON c.id = i.category_id
-           WHERE i.id = ?`
-        )
-        .get(result.lastInsertRowid) as InventoryItem;
+      return fetchItem(result.lastInsertRowid);
     }
   );
 
@@ -80,6 +104,7 @@ export function registerInventoryHandlers(): void {
       _e,
       payload: {
         id: number;
+        sku?: string;
         name?: string;
         category_id?: number;
         set_format?: string;
@@ -89,6 +114,10 @@ export function registerInventoryHandlers(): void {
         selling_price?: number;
         notes?: string;
         is_active?: number;
+        image_path?: string;
+        image_base64?: string;
+        image_mime?: string;
+        clear_image?: boolean;
       }
     ): InventoryItem => {
       const current = getDatabase()
@@ -96,9 +125,32 @@ export function registerInventoryHandlers(): void {
         .get(payload.id) as InventoryItem | undefined;
       if (!current) throw new Error('Inventory item not found');
 
+      const nextSku = payload.sku?.trim() || current.sku;
+      if (nextSku !== current.sku) {
+        const clash = getDatabase()
+          .prepare('SELECT id FROM inventory_items WHERE sku = ? AND id != ?')
+          .get(nextSku, payload.id) as { id: number } | undefined;
+        if (clash) throw new Error(`SKU "${nextSku}" është në përdorim`);
+      }
+
+      let nextImage = current.image_path || '';
+      if (payload.clear_image) {
+        deleteProductImage(current.image_path);
+        nextImage = '';
+      } else if (payload.image_base64) {
+        nextImage = saveProductImageFromBase64(
+          payload.image_base64,
+          payload.image_mime,
+          current.image_path
+        );
+      } else if (payload.image_path !== undefined) {
+        nextImage = payload.image_path;
+      }
+
       getDatabase()
         .prepare(
           `UPDATE inventory_items SET
+             sku = ?,
              name = ?,
              category_id = ?,
              set_format = ?,
@@ -107,11 +159,13 @@ export function registerInventoryHandlers(): void {
              cost_price = ?,
              selling_price = ?,
              notes = ?,
+             image_path = ?,
              is_active = ?,
              updated_at = datetime('now')
            WHERE id = ?`
         )
         .run(
+          nextSku,
           payload.name ?? current.name,
           payload.category_id ?? current.category_id,
           payload.set_format ?? current.set_format,
@@ -120,18 +174,27 @@ export function registerInventoryHandlers(): void {
           payload.cost_price ?? current.cost_price,
           payload.selling_price ?? current.selling_price,
           payload.notes ?? current.notes,
+          nextImage,
           payload.is_active ?? current.is_active,
           payload.id
         );
 
-      return getDatabase()
-        .prepare(
-          `SELECT i.*, c.name AS category_name
-           FROM inventory_items i
-           JOIN categories c ON c.id = i.category_id
-           WHERE i.id = ?`
-        )
-        .get(payload.id) as InventoryItem;
+      return fetchItem(payload.id);
+    }
+  );
+
+  // Return a data URL for a stored product photo (or null)
+  ipcMain.handle(
+    'inventory:getImage',
+    (_e, payload: { image_path?: string; id?: number }): string | null => {
+      let relative = payload.image_path || '';
+      if (!relative && payload.id) {
+        const row = getDatabase()
+          .prepare('SELECT image_path FROM inventory_items WHERE id = ?')
+          .get(payload.id) as { image_path: string } | undefined;
+        relative = row?.image_path || '';
+      }
+      return productImageToDataUrl(relative);
     }
   );
 
@@ -170,7 +233,6 @@ export function registerInventoryHandlers(): void {
     }
   );
 
-  /** Apply breakdown to stock (used internally by orders, exposed for testing). */
   ipcMain.handle(
     'inventory:applyBreakdown',
     (

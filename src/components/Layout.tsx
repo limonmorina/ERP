@@ -1,3 +1,7 @@
+/**
+ * Application shell: brand sidebar, navigation, DB backup control, and page outlet.
+ * Sidebar/header use `no-print` so they hide when printing A4 invoices.
+ */
 import { NavLink, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -7,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import clsx from 'clsx';
+import logo from '../assets/logo.png';
 
 const nav = [
   { to: '/', label: 'Paneli', icon: LayoutDashboard, end: true },
@@ -18,6 +23,7 @@ export function AppLayout() {
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
   const [backingUp, setBackingUp] = useState(false);
 
+  /** Trigger Electron IPC backup of the SQLite database file. */
   async function runBackup() {
     if (!window.erp) return;
     setBackingUp(true);
@@ -39,8 +45,13 @@ export function AppLayout() {
   return (
     <div className="flex h-full min-h-screen">
       <aside className="no-print flex w-60 shrink-0 flex-col border-r border-brand-900/20 bg-brand-950 text-brand-50">
-        <div className="border-b border-white/10 px-5 py-6">
-          <p className="font-display text-xl font-semibold leading-tight text-white">
+        <div className="border-b border-white/10 px-5 py-5">
+          <img
+            src={logo}
+            alt="HSM Furniture"
+            className="h-14 w-14 rounded-md object-cover shadow-sm ring-1 ring-white/10"
+          />
+          <p className="mt-3 font-display text-xl font-semibold leading-tight text-white">
             HSM Furniture
           </p>
           <p className="mt-1 text-xs text-brand-300">ERP Desktop · TVSH 18%</p>
@@ -85,13 +96,20 @@ export function AppLayout() {
 
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="no-print flex items-center justify-between border-b border-ink-200/80 bg-white/70 px-8 py-4 backdrop-blur">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-[0.14em] text-ink-500">
-              HSM Furniture · Kosovë
-            </p>
-            <h1 className="font-display text-2xl font-semibold text-ink-950">
-              Konsola e operimeve
-            </h1>
+          <div className="flex items-center gap-3">
+            <img
+              src={logo}
+              alt=""
+              className="hidden h-10 w-10 rounded object-cover shadow-sm sm:block"
+            />
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.14em] text-ink-500">
+                HSM Furniture · Kosovë
+              </p>
+              <h1 className="font-display text-2xl font-semibold text-ink-950">
+                Konsola e operimeve
+              </h1>
+            </div>
           </div>
         </header>
 

@@ -1,3 +1,7 @@
+/**
+ * Alert banner shown when selling a custom set format would break a full set
+ * and leave unmatched leftover pieces in inventory.
+ */
 import { AlertTriangle } from 'lucide-react';
 
 interface Props {

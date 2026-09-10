@@ -1,7 +1,11 @@
--- HSM Furniture ERP — SQLite schema
+-- HSM Furniture ERP - SQLite schema
+-- Defines persistent tables for settings, inventory, customers, orders, and invoices.
+-- Applied on startup via CREATE TABLE IF NOT EXISTS (idempotent for existing installs).
+
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 
+-- Singleton shop profile and invoice/legal defaults (always id = 1)
 CREATE TABLE IF NOT EXISTS business_settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   business_name TEXT NOT NULL DEFAULT 'HSM Furniture',
@@ -13,7 +17,7 @@ CREATE TABLE IF NOT EXISTS business_settings (
   logo_path TEXT DEFAULT '',
   tvsh_rate REAL NOT NULL DEFAULT 0.18,
   backup_directory TEXT DEFAULT '',
-  warranty_text TEXT NOT NULL DEFAULT 'GARANCIONI PROFESIONAL — HSM Furniture
+  warranty_text TEXT NOT NULL DEFAULT 'GARANCIONI PROFESIONAL - HSM Furniture
 
 1. Produktet garantohet për defekte të fabrikimit dhe materialeve, sipas kushteve të mëposhtme.
 2. Garancioni vlen vetëm me faturën origjinale dhe për blerësin e parë.
@@ -39,10 +43,11 @@ CREATE TABLE IF NOT EXISTS inventory_items (
   category_id INTEGER NOT NULL REFERENCES categories(id),
   set_format TEXT NOT NULL DEFAULT '1', -- e.g. "3-3-1"
   stock_sets INTEGER NOT NULL DEFAULT 0,
-  leftover_pieces TEXT NOT NULL DEFAULT '', -- JSON map of piece index -> count
+  leftover_pieces TEXT NOT NULL DEFAULT '', -- JSON map of piece size -> count
   cost_price REAL NOT NULL DEFAULT 0, -- supplier cost (ex-VAT or as entered)
   selling_price REAL NOT NULL DEFAULT 0, -- retail inclusive of TVSH
   notes TEXT DEFAULT '',
+  image_path TEXT NOT NULL DEFAULT '', -- relative filename under userData/product-images
   is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -65,10 +70,10 @@ CREATE TABLE IF NOT EXISTS orders (
   customer_id INTEGER NOT NULL REFERENCES customers(id),
   status TEXT NOT NULL DEFAULT 'Pending Delivery'
     CHECK (status IN ('Pending Delivery', 'Delivered', 'Returned')),
-  kapare REAL NOT NULL DEFAULT 0,
+  kapare REAL NOT NULL DEFAULT 0, -- deposit / down payment
   transport_fee REAL NOT NULL DEFAULT 0,
   show_transport_on_invoice INTEGER NOT NULL DEFAULT 1,
-  custom_notes TEXT DEFAULT '', -- Këndë me dimensione
+  custom_notes TEXT DEFAULT '', -- e.g. corner dimensions
   subtotal REAL NOT NULL DEFAULT 0,
   tvsh_amount REAL NOT NULL DEFAULT 0,
   total REAL NOT NULL DEFAULT 0,
@@ -92,8 +97,8 @@ CREATE TABLE IF NOT EXISTS order_items (
   set_format_requested TEXT NOT NULL, -- e.g. "3-3-3-1"
   quantity INTEGER NOT NULL DEFAULT 1,
   unit_cost REAL NOT NULL DEFAULT 0,
-  list_price REAL NOT NULL DEFAULT 0,
-  unit_price REAL NOT NULL DEFAULT 0,
+  list_price REAL NOT NULL DEFAULT 0, -- entitled/fair price baseline
+  unit_price REAL NOT NULL DEFAULT 0, -- actual sell price
   discount_amount REAL NOT NULL DEFAULT 0,
   line_total REAL NOT NULL DEFAULT 0,
   broke_set INTEGER NOT NULL DEFAULT 0

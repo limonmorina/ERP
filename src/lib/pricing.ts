@@ -1,5 +1,10 @@
-/** Fair price for a requested set format vs full-set catalog price. */
+/**
+ * Fair-price helpers for partial or oversized furniture sets.
+ * Proportional "entitled" price is NOT a customer discount; discount is only
+ * when the sell price is below that fair amount.
+ */
 
+/** Parse formats like "3-3-1" into piece counts. */
 function parseSetFormat(format: string): number[] {
   return format
     .split('-')
@@ -21,8 +26,8 @@ export type PriceSuggestion = {
 };
 
 /**
- * Proportional worth of the requested set — NOT a discount.
- * Example: full 3-3-1 = €7000 → requested 3-1 ≈ €7000 * (4/7).
+ * Proportional worth of the requested set - NOT a discount.
+ * Example: full 3-3-1 = EUR 7000 -> requested 3-1 approx EUR 7000 * (4/7).
  */
 export function suggestUnitPrice(
   catalogPrice: number,
@@ -42,7 +47,7 @@ export function suggestUnitPrice(
       stockUnits,
       requestedUnits,
       kind: 'same',
-      note: 'I njëjti set i plotë — çmimi i justë është çmimi i inventarit.',
+      note: 'I njëjti set i plotë - çmimi i justë është çmimi i inventarit.',
     };
   }
   if (ratio < 1) {
@@ -53,7 +58,7 @@ export function suggestUnitPrice(
       stockUnits,
       requestedUnits,
       kind: 'smaller',
-      note: `Kombinimi ${requestedFormat} vlen më pak se seti i plotë ${stockSetFormat} (${requestedUnits}/${stockUnits} njësi). Kjo NUK është zbritje — është çmimi i justë i pjesëve.`,
+      note: `Kombinimi ${requestedFormat} vlen më pak se seti i plotë ${stockSetFormat} (${requestedUnits}/${stockUnits} njësi). Kjo NUK është zbritje - është çmimi i justë i pjesëve.`,
     };
   }
   return {
@@ -63,7 +68,7 @@ export function suggestUnitPrice(
     stockUnits,
     requestedUnits,
     kind: 'larger',
-    note: `Kombinimi ${requestedFormat} është më i madh se seti ${stockSetFormat} (${requestedUnits}/${stockUnits} njësi). Çmimi i justë është më i lartë — jo “shtesë”, por vlera e setit.`,
+    note: `Kombinimi ${requestedFormat} është më i madh se seti ${stockSetFormat} (${requestedUnits}/${stockUnits} njësi). Çmimi i justë është më i lartë - jo “shtesë”, por vlera e setit.`,
   };
 }
 

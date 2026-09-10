@@ -1,3 +1,8 @@
+/**
+ * Financial overview dashboard.
+ * Loads analytics via Electron IPC and renders KPI cards plus discount,
+ * top-sellers, returns, and delivery-status tables.
+ */
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -12,6 +17,7 @@ import { formatDate, formatEuro, hasErpBridge } from '../lib/format';
 import { statusLabel } from '../lib/labels';
 import type { DashboardMetrics } from '../../electron/types';
 
+/** Placeholder until the first successful analytics.dashboard() call. */
 const emptyMetrics: DashboardMetrics = {
   monthlyRevenue: 0,
   netProfit: 0,
@@ -27,9 +33,10 @@ export function DashboardPage() {
   const [metrics, setMetrics] = useState<DashboardMetrics>(emptyMetrics);
   const [error, setError] = useState<string | null>(null);
 
+  // Load dashboard metrics once on mount (requires Electron preload bridge).
   useEffect(() => {
     if (!hasErpBridge()) {
-      setError('Ura e Electron nuk është aktive — hapni me npm run electron:dev.');
+      setError('Ura e Electron nuk është aktive - hapni me npm run electron:dev.');
       return;
     }
     window.erp.analytics
@@ -55,6 +62,7 @@ export function DashboardPage() {
         </div>
       )}
 
+      {/* KPI summary cards */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <MetricCard
           icon={<Wallet size={18} />}
@@ -91,6 +99,7 @@ export function DashboardPage() {
         />
       </div>
 
+      {/* True customer discounts only (below fair price), not partial-set pricing */}
       <section className="panel p-5">
         <h3 className="text-lg font-semibold">Zbritja</h3>
         <p className="mt-1 text-sm text-ink-600">
@@ -137,6 +146,7 @@ export function DashboardPage() {
         </div>
       </section>
 
+      {/* Top sellers and returns */}
       <div className="grid gap-6 xl:grid-cols-2">
         <section className="panel p-5">
           <h3 className="text-lg font-semibold">Setet më të shitura</h3>
@@ -203,6 +213,7 @@ export function DashboardPage() {
         </section>
       </div>
 
+      {/* Delivery status roll-up with link into Orders */}
       <section className="panel p-5">
         <div className="flex items-center justify-between gap-4">
           <h3 className="text-lg font-semibold">Statusi i dorëzimeve</h3>
@@ -226,7 +237,7 @@ export function DashboardPage() {
               {metrics.deliveries.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="text-ink-500">
-                    Nuk ka porosi ende — shtoni stok dhe krijoni një porosi për të filluar.
+                    Nuk ka porosi ende - shtoni stok dhe krijoni një porosi për të filluar.
                   </td>
                 </tr>
               ) : (
@@ -258,6 +269,7 @@ export function DashboardPage() {
   );
 }
 
+/** Compact KPI tile used in the top metrics grid. */
 function MetricCard({
   label,
   value,
@@ -290,6 +302,7 @@ function MetricCard({
   );
 }
 
+/** Color-coded Albanian status label for delivery rows. */
 function StatusPill({ status }: { status: string }) {
   const tone =
     status === 'Delivered'

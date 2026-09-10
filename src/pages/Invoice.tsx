@@ -1,8 +1,14 @@
+/**
+ * A4 invoice preview and print flow for a single order.
+ * Loads invoice payload via IPC; native print goes through Electron's print dialog.
+ * InvoiceDocument is the printable sheet (also used in the on-screen print preview modal).
+ */
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, Eye, Printer, X } from 'lucide-react';
 import { formatDate, formatEuro, hasErpBridge } from '../lib/format';
 import type { InvoicePayload } from '../../electron/types';
+import logo from '../assets/logo.png';
 
 export function InvoicePage() {
   const { orderId } = useParams();
@@ -11,9 +17,10 @@ export function InvoicePage() {
   const [printing, setPrinting] = useState(false);
   const [showPrintPreview, setShowPrintPreview] = useState(false);
 
+  // Fetch invoice data whenever the route orderId changes.
   useEffect(() => {
     if (!hasErpBridge()) {
-      setError('Ura e Electron nuk është aktive — hapni me npm run electron:dev');
+      setError('Ura e Electron nuk është aktive - hapni me npm run electron:dev');
       return;
     }
     const id = Number(orderId);
@@ -29,6 +36,7 @@ export function InvoicePage() {
       );
   }, [orderId]);
 
+  /** Open the OS print dialog through Electron (includes system print preview). */
   async function handlePrint() {
     if (!payload || !hasErpBridge()) return;
     setPrinting(true);
@@ -61,6 +69,7 @@ export function InvoicePage() {
 
   return (
     <div className="space-y-4">
+      {/* Toolbar (hidden when printing) */}
       <div className="no-print flex flex-wrap items-center justify-between gap-3">
         <div>
           <Link to="/orders" className="btn-ghost inline-flex">
@@ -93,11 +102,12 @@ export function InvoicePage() {
       </div>
 
       <div className="no-print rounded-lg border border-brand-200 bg-brand-50 px-4 py-2 text-sm text-brand-900">
-        Pamje paraprake e faturës — ashtu si do të dalë në letër A4
+        Pamje paraprake e faturës - ashtu si do të dalë në letër A4
       </div>
 
       <InvoiceDocument payload={payload} printId />
 
+      {/* Full-screen on-page preview before invoking the OS printer */}
       {showPrintPreview && (
         <div className="no-print fixed inset-0 z-50 flex flex-col bg-ink-950/70 backdrop-blur-sm">
           <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-ink-950 px-4 py-3 text-white">
@@ -138,6 +148,10 @@ export function InvoicePage() {
   );
 }
 
+/**
+ * Printable A4 invoice layout: business header, customer, line items, totals, warranty.
+ * When printId is true, the root gets #invoice-print-root for CSS @media print targeting.
+ */
 function InvoiceDocument({
   payload,
   printId = false,
@@ -156,11 +170,14 @@ function InvoiceDocument({
       id={printId ? 'invoice-print-root' : undefined}
       className="invoice-print-sheet mx-auto w-full max-w-[210mm] bg-white p-8 text-ink-950 shadow-panel print:shadow-none"
     >
+      {/* Business + invoice meta */}
       <header className="flex items-start justify-between gap-6 border-b border-ink-200 pb-6">
         <div className="flex gap-4">
-          <div className="flex h-16 w-16 items-center justify-center rounded-md border border-dashed border-ink-300 bg-ink-50 text-[10px] font-medium uppercase tracking-wide text-ink-500">
-            Logo
-          </div>
+          <img
+            src={logo}
+            alt="HSM Furniture"
+            className="h-16 w-16 rounded-md object-cover ring-1 ring-ink-200"
+          />
           <div>
             <h1 className="font-display text-2xl font-bold text-brand-900">
               {settings.business_name}
@@ -221,12 +238,12 @@ function InvoiceDocument({
             <th className="py-2 pr-2">Artikulli</th>
             <th className="py-2 pr-2">Seti</th>
             <th className="py-2 pr-2 text-right">Sasia</th>
-            <th className="py-2 pr-2 text-right">I justë</th>
-            <th className="py-2 pr-2 text-right">Shitja</th>
+            <th className="py-2 pr-2 text-right">Çmimi</th>
             <th className="py-2 text-right">Totali</th>
           </tr>
         </thead>
         <tbody>
+          {/* Client-facing lines: only sell price (no fair/entitled price column) */}
           {items.map((line) => {
             const adj = line.discount_amount || 0;
             return (
@@ -240,7 +257,7 @@ function InvoiceDocument({
                   )}
                   {adj > 0 && (
                     <span className="ml-2 text-[10px] font-normal text-accent">
-                      zbritje klienti −{formatEuro(adj)}
+                      zbritje klienti -{formatEuro(adj)}
                     </span>
                   )}
                 </td>
@@ -248,9 +265,6 @@ function InvoiceDocument({
                   {line.set_format_requested}
                 </td>
                 <td className="py-3 pr-2 text-right font-mono">{line.quantity}</td>
-                <td className="py-3 pr-2 text-right text-ink-500">
-                  {formatEuro(line.list_price || line.unit_price)}
-                </td>
                 <td className="py-3 pr-2 text-right">{formatEuro(line.unit_price)}</td>
                 <td className="py-3 text-right font-medium">
                   {formatEuro(line.line_total)}
@@ -260,7 +274,7 @@ function InvoiceDocument({
           })}
           {showTransport && order.transport_fee > 0 && (
             <tr className="border-b border-ink-100">
-              <td className="py-3 pr-2" colSpan={5}>
+              <td className="py-3 pr-2" colSpan={4}>
                 Transport / Dorëzim
               </td>
               <td className="py-3 text-right font-medium">
@@ -271,6 +285,7 @@ function InvoiceDocument({
         </tbody>
       </table>
 
+      {/* Totals: subtotal (with TVSH), discount, transport, kapare, remaining */}
       <div className="mt-6 flex justify-end">
         <dl className="w-full max-w-xs space-y-2 text-sm">
           <div className="flex justify-between gap-8">
@@ -310,6 +325,7 @@ function InvoiceDocument({
         </dl>
       </div>
 
+      {/* Warranty, terms, and signature lines */}
       <footer className="mt-8 border-t border-ink-200 pt-4 text-xs leading-relaxed text-ink-700">
         <p className="font-semibold text-ink-900">Garancioni profesional</p>
         <div className="mt-2 whitespace-pre-line text-[11px] leading-snug text-ink-600">

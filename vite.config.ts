@@ -1,3 +1,7 @@
+/**
+ * Vite build for the React renderer plus Electron main/preload via vite-plugin-electron.
+ * Also copies the SQLite schema SQL into dist-electron for runtime DB init.
+ */
 import { defineConfig, Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import electron from 'vite-plugin-electron/simple';
@@ -34,6 +38,7 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
+              // Native module must stay external (loaded by Electron at runtime).
               external: ['better-sqlite3'],
             },
           },

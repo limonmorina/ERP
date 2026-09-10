@@ -1,3 +1,6 @@
+// IPC handlers for customers and orders in HSM Furniture ERP.
+// Creates orders with set-breakdown stock deduction, status updates, returns, and deletes.
+
 import { ipcMain } from 'electron';
 import { getDatabase } from '../database/db';
 import {
@@ -20,6 +23,7 @@ import type {
   OrderStatus,
 } from '../types';
 
+/** Next order number in ORD-YYYY-#### form, based on the latest existing row. */
 function nextOrderNumber(db: ReturnType<typeof getDatabase>): string {
   const row = db
     .prepare(`SELECT order_number FROM orders ORDER BY id DESC LIMIT 1`)
@@ -31,6 +35,7 @@ function nextOrderNumber(db: ReturnType<typeof getDatabase>): string {
   return `ORD-${year}-${String(seq).padStart(4, '0')}`;
 }
 
+/** Register customer and order IPC channels on the main process. */
 export function registerOrderHandlers(): void {
   ipcMain.handle('customers:list', (): Customer[] => {
     return getDatabase()
@@ -125,6 +130,7 @@ export function registerOrderHandlers(): void {
 
       if (!payload.items?.length) throw new Error('Porosia duhet të ketë të paktën një artikull');
 
+      // Single transaction: validate stock, insert order/lines, then update inventory
       const create = db.transaction(() => {
         let subtotal = 0;
         let totalCost = 0;
@@ -190,10 +196,10 @@ export function registerOrderHandlers(): void {
               : entitledPrice;
           if (unitPrice < 0) throw new Error('Çmimi i shitjes nuk mund të jetë negativ');
 
-          // True zbritje only if sold below the fair/entitled price for this combination
+          // True discount only if sold below the fair/entitled price for this combination
           const lineDiscount = customerDiscountAmount(entitledPrice, unitPrice, line.quantity);
           const lineTotal = unitPrice * line.quantity;
-          // Profit cost basis follows the requested combination worth, not full-set consumption.
+          // Profit cost basis follows the requested combination worth, not full-set consumption
           const entitledCostPerCombo = suggestUnitPrice(
             item.cost_price,
             item.set_format,
@@ -340,7 +346,7 @@ export function registerOrderHandlers(): void {
       let returnedAt = order.returned_at;
 
       if (payload.status === 'Delivered') {
-        // On delivery, remaining balance is collected (business rule).
+        // On delivery, remaining balance is collected (business rule)
         remaining = 0;
         deliveredAt = new Date().toISOString();
       }
@@ -349,7 +355,7 @@ export function registerOrderHandlers(): void {
       }
 
       const apply = db.transaction(() => {
-        // Restore stock when marking Returned (once — only if not already returned).
+        // Restore stock when marking Returned (once - only if not already returned)
         if (payload.status === 'Returned' && order.status !== 'Returned') {
           const items = db
             .prepare('SELECT * FROM order_items WHERE order_id = ?')
@@ -379,8 +385,7 @@ export function registerOrderHandlers(): void {
           }
         }
 
-        // If re-opening a returned order back to pending/delivered, do not auto-re-consume stock
-        // (would need a new order). Keep inventory as restored.
+        // Re-opening a returned order does not auto-re-consume stock (create a new order instead)
 
         db.prepare(
           `UPDATE orders SET
@@ -417,7 +422,7 @@ export function registerOrderHandlers(): void {
         .prepare('SELECT * FROM order_items WHERE order_id = ?')
         .all(orderId) as OrderItem[];
 
-      // Restore stock only if order was not already returned (returns don't auto-restore today)
+      // Restore stock only if not already returned (return path already restored inventory)
       if (order.status !== 'Returned') {
         const updateStock = db.prepare(
           `UPDATE inventory_items

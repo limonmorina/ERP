@@ -1,3 +1,6 @@
+// Preload bridge for HSM Furniture ERP.
+// Exposes a typed `window.erp` API to the renderer via contextBridge (no Node access in the UI).
+
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
   BusinessSettings,
@@ -12,6 +15,7 @@ import type {
   SetBreakdownPreview,
 } from './types';
 
+/** Renderer-facing IPC facade. Each method maps 1:1 to a main-process handler. */
 const api = {
   categories: {
     list: (): Promise<Category[]> => ipcRenderer.invoke('categories:list'),
@@ -26,12 +30,27 @@ const api = {
       category_id: number;
       set_format: string;
       stock_sets: number;
+      leftover_pieces?: string;
       cost_price: number;
       selling_price: number;
       notes?: string;
+      image_path?: string;
+      image_base64?: string;
+      image_mime?: string;
     }): Promise<InventoryItem> => ipcRenderer.invoke('inventory:create', payload),
-    update: (payload: Partial<InventoryItem> & { id: number }): Promise<InventoryItem> =>
-      ipcRenderer.invoke('inventory:update', payload),
+    update: (
+      payload: Partial<InventoryItem> & {
+        id: number;
+        image_base64?: string;
+        image_mime?: string;
+        clear_image?: boolean;
+      }
+    ): Promise<InventoryItem> => ipcRenderer.invoke('inventory:update', payload),
+    // Soft-delete: deactivate the item rather than removing the row
+    remove: (id: number): Promise<InventoryItem> =>
+      ipcRenderer.invoke('inventory:update', { id, is_active: 0 }),
+    getImage: (payload: { image_path?: string; id?: number }): Promise<string | null> =>
+      ipcRenderer.invoke('inventory:getImage', payload),
     previewBreakdown: (payload: {
       inventory_item_id: number;
       set_format_requested: string;

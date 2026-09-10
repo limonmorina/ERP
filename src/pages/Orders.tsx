@@ -1,7 +1,14 @@
+/**
+ * Orders and sales page: create orders with fair-price / discount logic,
+ * preview set breakdowns, update delivery status, and manage profit / invoice links.
+ *
+ * Major blocks: load, pricing preview, form submit, status updates, table rendering.
+ */
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Eye, FileText, MoreVertical, Plus, Search } from 'lucide-react';
 import { SetBreakdownWarning } from '../components/SetBreakdownWarning';
+import { ProductThumb } from '../components/ProductThumb';
 import { formatDate, formatEuro, hasErpBridge } from '../lib/format';
 import { STATUS_LABELS } from '../lib/labels';
 import {
@@ -28,7 +35,7 @@ const TAB_META: Record<
   pending: {
     label: 'Në pritje',
     status: 'Pending Delivery',
-    hint: 'Porosi aktive — ende pa dorëzuar',
+    hint: 'Porosi aktive - ende pa dorëzuar',
   },
   delivered: {
     label: 'Të dorëzuara',
@@ -42,6 +49,7 @@ const TAB_META: Record<
   },
 };
 
+/** Left-border + background tint by delivery status for the orders table. */
 function rowTone(status: OrderStatus): string {
   if (status === 'Delivered') return 'bg-emerald-50/90 border-l-4 border-l-emerald-500';
   if (status === 'Pending Delivery') return 'bg-amber-50/90 border-l-4 border-l-amber-400';
@@ -92,6 +100,7 @@ export function OrdersPage() {
   const selectedItem = items.find((i) => i.id === orderForm.inventory_item_id);
   const catalogPrice = selectedItem?.selling_price ?? 0;
 
+  // --- Pricing preview (fair price vs true customer discount) ---
   const priceHint = useMemo(() => {
     if (!selectedItem) return null;
     try {
@@ -106,12 +115,14 @@ export function OrdersPage() {
   }, [selectedItem, catalogPrice, orderForm.set_format_requested]);
 
   const entitledPrice = priceHint?.entitled ?? catalogPrice;
+  // Discount only when sell price is below fair/entitled price.
   const trueDiscount = customerDiscount(
     orderForm.entitled_price || entitledPrice,
     orderForm.unit_price,
     orderForm.quantity
   );
 
+  // Proportional cost for the requested format (same ratio logic as selling price).
   const calculatedCost = useMemo(() => {
     if (!selectedItem) return 0;
     try {
@@ -132,6 +143,7 @@ export function OrdersPage() {
     calculatedRevenue - calculatedCost - (orderForm.transport_fee || 0);
   const displayProfit = profitManual && manualProfit !== null ? manualProfit : calculatedProfit;
 
+  // Keep manual profit field in sync unless the user overrode it.
   useEffect(() => {
     if (!profitManual) setManualProfit(calculatedProfit);
   }, [calculatedProfit, profitManual]);
@@ -161,6 +173,10 @@ export function OrdersPage() {
     [orders]
   );
 
+  /**
+   * Fill fair and/or sell price from suggestUnitPrice unless the user locked them.
+   * `force` bypasses both manual locks (e.g. after picking a new inventory item).
+   */
   function applySuggestedPrice(
     item: InventoryItem,
     format: string,
@@ -183,9 +199,10 @@ export function OrdersPage() {
     }
   }
 
+  // --- Load ---
   async function load() {
     if (!hasErpBridge()) {
-      setError('Ura e Electron nuk është aktive — hapni me npm run electron:dev');
+      setError('Ura e Electron nuk është aktive - hapni me npm run electron:dev');
       return;
     }
     const [o, c, i] = await Promise.all([
@@ -232,6 +249,7 @@ export function OrdersPage() {
     );
   }, []);
 
+  // Close the per-row actions menu when clicking outside.
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!menuRef.current?.contains(e.target as Node)) {
@@ -242,6 +260,7 @@ export function OrdersPage() {
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
 
+  /** Dry-run stock impact for the line item currently in the form. */
   async function previewLine() {
     if (!hasErpBridge() || !orderForm.inventory_item_id) return;
     const result = await window.erp.inventory.previewBreakdown({
@@ -252,6 +271,7 @@ export function OrdersPage() {
     setBreakdownPreview(result);
   }
 
+  // --- Form submit (create customer if needed, then order) ---
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!hasErpBridge()) return;
@@ -308,6 +328,7 @@ export function OrdersPage() {
     }
   }
 
+  // --- Status updates (also switches the active tab) ---
   async function updateStatus(orderId: number, status: OrderStatus) {
     if (!hasErpBridge()) return;
     await window.erp.orders.updateStatus({ order_id: orderId, status });
@@ -330,6 +351,7 @@ export function OrdersPage() {
     }
   }
 
+  /** Permanent delete; backend restores inventory stock. */
   async function deleteOrder(orderId: number) {
     if (!hasErpBridge()) return;
     const ok = window.confirm(
@@ -422,6 +444,7 @@ export function OrdersPage() {
         </div>
       )}
 
+      {/* New-order form: customer + line item + pricing + payment fields */}
       {showForm && (
         <form onSubmit={onSubmit} className="panel space-y-6 p-5">
           <div className="flex flex-wrap items-center gap-4">
@@ -530,6 +553,17 @@ export function OrdersPage() {
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div className="field md:col-span-2">
               <label>Artikulli nga inventari</label>
+              <div className="flex items-start gap-3">
+                {selectedItem && (
+                  <ProductThumb
+                    imagePath={selectedItem.image_path}
+                    itemId={selectedItem.id}
+                    alt={selectedItem.name}
+                    size={56}
+                    className="mt-0.5"
+                  />
+                )}
+                <div className="min-w-0 flex-1">
               <select
                 className="input"
                 required
@@ -559,12 +593,15 @@ export function OrdersPage() {
                   <option key={item.id} value={item.id}>
                     {item.name} · {item.set_format} · {item.stock_sets} sete të plota
                     {item.leftover_pieces ? ' + mbetje' : ''}
+                    {item.category_name ? ` · ${item.category_name}` : ''}
                   </option>
                 ))}
               </select>
               {selectedItem?.notes && (
                 <p className="mt-1 text-xs text-ink-500">{selectedItem.notes}</p>
               )}
+                </div>
+              </div>
             </div>
             <div className="field">
               <label>Formati i kërkuar i setit</label>
@@ -599,14 +636,14 @@ export function OrdersPage() {
             </div>
           </div>
 
-          {/* Pricing panel */}
+          {/* Pricing panel: catalog vs fair vs sell price, discount, profit */}
           <div className="rounded-xl border border-ink-200 bg-ink-50/80 p-4">
             <h3 className="text-sm font-semibold text-ink-900">
               Çmimi i justë vs zbritja e klientit
             </h3>
             <p className="mt-1 text-xs text-ink-600">
               Nëse klienti merr set më të vogël (p.sh. 3-1 nga 3-3-1), çmimi ulet sepse ashtu
-              vlen ai kombinim — kjo nuk është zbritje. Zbritja është vetëm kur e shitni më lirë
+              vlen ai kombinim - kjo nuk është zbritje. Zbritja është vetëm kur e shitni më lirë
               se çmimi i justë (favor për klientin).
             </p>
             <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -836,7 +873,7 @@ export function OrdersPage() {
               </label>
             </div>
             <div className="field md:col-span-2 xl:col-span-4">
-              <label>Shënime — Këndë me dimensione</label>
+              <label>Shënime - Këndë me dimensione</label>
               <textarea
                 className="input min-h-[72px]"
                 value={orderForm.custom_notes}
@@ -885,6 +922,7 @@ export function OrdersPage() {
         </form>
       )}
 
+      {/* Orders table (filtered by tab + search) */}
       <div className="table-wrap">
         <table className="data">
           <thead>
@@ -915,13 +953,13 @@ export function OrdersPage() {
                     {order.order_number}
                     {order.set_break_warning === 1 && (
                       <span className="ml-2 text-accent" title={order.set_break_message}>
-                        ⚠ ndarje seti
+                        Kujdes: ndarje seti
                       </span>
                     )}
                   </td>
                   <td>{order.customer_name}</td>
                   <td className="max-w-[160px] truncate text-xs text-ink-700">
-                    {order.item_names || '—'}
+                    {order.item_names || '-'}
                   </td>
                   <td>
                     <select
@@ -944,7 +982,7 @@ export function OrdersPage() {
                         −{formatEuro(order.discount_total)}
                       </span>
                     ) : (
-                      '—'
+                      '-'
                     )}
                   </td>
                   <td>{formatEuro(order.kapare)}</td>

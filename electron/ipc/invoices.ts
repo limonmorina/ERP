@@ -1,3 +1,6 @@
+// IPC handlers for invoices, business settings, and manual backup in HSM Furniture ERP.
+// Builds invoice payloads, triggers OS print dialogs, and persists shop settings.
+
 import { BrowserWindow, ipcMain } from 'electron';
 import { getDatabase } from '../database/db';
 import { backupDatabase } from '../database/backup';
@@ -9,6 +12,7 @@ import type {
   OrderItem,
 } from '../types';
 
+/** Next invoice number in INV-YYYY-#### form, based on the latest existing row. */
 function nextInvoiceNumber(db: ReturnType<typeof getDatabase>): string {
   const year = new Date().getFullYear();
   const row = db
@@ -20,6 +24,7 @@ function nextInvoiceNumber(db: ReturnType<typeof getDatabase>): string {
   return `INV-${year}-${String(seq).padStart(4, '0')}`;
 }
 
+/** Register settings, invoice, and backup IPC channels on the main process. */
 export function registerInvoiceHandlers(): void {
   ipcMain.handle('settings:get', (): BusinessSettings => {
     return getDatabase()
@@ -69,6 +74,7 @@ export function registerInvoiceHandlers(): void {
     }
   );
 
+  // Lazy-create an invoice row the first time an order is opened for printing/view
   ipcMain.handle('invoices:getForOrder', (_e, orderId: number): InvoicePayload => {
     const db = getDatabase();
     const order = db
@@ -114,6 +120,7 @@ export function registerInvoiceHandlers(): void {
     };
   });
 
+  // Print the currently focused (or first) BrowserWindow contents as A4
   ipcMain.handle('invoices:print', async (_e, orderId: number) => {
     const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
     if (!win) throw new Error('No window available for printing');

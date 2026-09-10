@@ -1,3 +1,6 @@
+// SQLite access layer for HSM Furniture ERP.
+// Opens the user-data database, applies schema/migrations, and seeds default categories/settings.
+
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
@@ -12,8 +15,10 @@ const DEFAULT_CATEGORIES = [
   { name: 'Dyshekë', description: 'Dyshekë dhe produkte gjumi' },
   { name: 'Komodë', description: 'Komodë dhe depozitim' },
   { name: 'Tavolina kafeje', description: 'Tavolina kafeje dhe anësore' },
+  { name: 'Karrike', description: 'Karrige ngrënie, zyre dhe ndenjeje' },
 ];
 
+/** Legacy English category names renamed to Albanian on existing installs. */
 const CATEGORY_RENAMES: Record<string, string> = {
   'Living Room': 'Dhoma e ndenjes',
   'Bedroom Sets': 'Sete gjumi',
@@ -21,6 +26,7 @@ const CATEGORY_RENAMES: Record<string, string> = {
   'Coffee Tables': 'Tavolina kafeje',
 };
 
+/** Absolute path to furniture-erp.db under Electron userData/data. */
 export function getDbPath(): string {
   const userData = app.getPath('userData');
   const dataDir = path.join(userData, 'data');
@@ -30,6 +36,7 @@ export function getDbPath(): string {
   return path.join(dataDir, 'furniture-erp.db');
 }
 
+/** Return the open connection, or throw if initDatabase has not run. */
 export function getDatabase(): Database.Database {
   if (!db) {
     throw new Error('Database not initialized. Call initDatabase() first.');
@@ -37,6 +44,9 @@ export function getDatabase(): Database.Database {
   return db;
 }
 
+/**
+ * Open SQLite, enable FK/WAL, apply schema.sql (or inline fallback), then seed and migrate.
+ */
 export function initDatabase(): Database.Database {
   const dbPath = getDbPath();
   db = new Database(dbPath);
@@ -63,6 +73,10 @@ export function initDatabase(): Database.Database {
   return db;
 }
 
+/**
+ * Additive migrations for columns introduced after the initial schema.
+ * Safe to re-run: only ALTER when the column is missing.
+ */
 function migrateSchema(database: Database.Database): void {
   const orderCols = database.prepare(`PRAGMA table_info(orders)`).all() as Array<{ name: string }>;
   const orderNames = new Set(orderCols.map((c) => c.name));
@@ -80,6 +94,14 @@ function migrateSchema(database: Database.Database): void {
     database.exec(`ALTER TABLE order_items ADD COLUMN discount_amount REAL NOT NULL DEFAULT 0`);
   }
 
+  const inventoryCols = database
+    .prepare(`PRAGMA table_info(inventory_items)`)
+    .all() as Array<{ name: string }>;
+  const inventoryNames = new Set(inventoryCols.map((c) => c.name));
+  if (!inventoryNames.has('image_path')) {
+    database.exec(`ALTER TABLE inventory_items ADD COLUMN image_path TEXT NOT NULL DEFAULT ''`);
+  }
+
   // Upgrade short warranty to professional text if still the old one-liner
   const settings = database
     .prepare('SELECT warranty_text FROM business_settings WHERE id = 1')
@@ -95,6 +117,7 @@ function migrateSchema(database: Database.Database): void {
   }
 }
 
+/** Embedded schema used when schema.sql cannot be resolved at runtime. */
 function applyInlineSchema(database: Database.Database): void {
   database.exec(`
     PRAGMA foreign_keys = ON;
@@ -129,6 +152,7 @@ function applyInlineSchema(database: Database.Database): void {
       cost_price REAL NOT NULL DEFAULT 0,
       selling_price REAL NOT NULL DEFAULT 0,
       notes TEXT DEFAULT '',
+      image_path TEXT NOT NULL DEFAULT '',
       is_active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -190,6 +214,10 @@ function applyInlineSchema(database: Database.Database): void {
   `);
 }
 
+/**
+ * First-run defaults: singleton business_settings row and Albanian categories.
+ * Also renames legacy English category labels on existing databases.
+ */
 function seedDefaults(database: Database.Database): void {
   const settings = database.prepare('SELECT id, business_name FROM business_settings WHERE id = 1').get() as
     | { id: number; business_name: string }
@@ -223,14 +251,23 @@ function seedDefaults(database: Database.Database): void {
     tx();
   } else {
     const rename = database.prepare('UPDATE categories SET name = ? WHERE name = ?');
+    const insertMissing = database.prepare(
+      'INSERT OR IGNORE INTO categories (name, description) VALUES (?, ?)'
+    );
     const tx = database.transaction(() => {
       for (const [from, to] of Object.entries(CATEGORY_RENAMES)) {
         rename.run(to, from);
+      }
+      // Ensure newer categories (e.g. Karrike) exist on older databases
+      for (const cat of DEFAULT_CATEGORIES) {
+        insertMissing.run(cat.name, cat.description);
       }
     });
     tx();
   }
 }
+
+/** Close the SQLite connection and clear the module singleton. */
 export function closeDatabase(): void {
   if (db) {
     db.close();

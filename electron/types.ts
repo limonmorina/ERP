@@ -1,3 +1,7 @@
+// Shared TypeScript contracts for HSM Furniture ERP.
+// Used by the Electron main process, preload bridge, and renderer for IPC payloads.
+
+/** Lifecycle status of a sales order. */
 export type OrderStatus = 'Pending Delivery' | 'Delivered' | 'Returned';
 
 export interface Category {
@@ -13,15 +17,22 @@ export interface InventoryItem {
   name: string;
   category_id: number;
   category_name?: string;
+  /** Hyphen-separated piece sizes for a complete set, e.g. "3-3-1". */
   set_format: string;
   stock_sets: number;
+  /** JSON map of leftover piece size -> count after set breaks. */
   leftover_pieces: string;
   cost_price: number;
   selling_price: number;
   notes: string;
+  /** Relative filename under userData/product-images (empty if none). */
+  image_path: string;
+  /** Soft-delete flag: 1 = active, 0 = hidden from lists. */
   is_active: number;
   created_at: string;
   updated_at: string;
+  /** Optional data URL filled by inventory:getImage for UI thumbnails. */
+  image_data_url?: string | null;
 }
 
 export interface Customer {
@@ -52,6 +63,7 @@ export interface Order {
   customer_name?: string;
   item_names?: string;
   status: OrderStatus;
+  /** Deposit / down payment collected up front. */
   kapare: number;
   transport_fee: number;
   show_transport_on_invoice: number;
@@ -77,6 +89,7 @@ export interface OrderItem {
   set_format_requested: string;
   quantity: number;
   unit_cost: number;
+  /** Fair/entitled list price used as the discount baseline. */
   list_price: number;
   unit_price: number;
   discount_amount: number;
@@ -118,6 +131,7 @@ export interface DiscountLogRow {
   order_date: string;
 }
 
+/** Aggregated metrics returned by the analytics dashboard IPC. */
 export interface DashboardMetrics {
   monthlyRevenue: number;
   netProfit: number;
@@ -139,6 +153,7 @@ export interface DashboardMetrics {
   discountLog: DiscountLogRow[];
 }
 
+/** Result of a dry-run set-breakdown preview (no stock mutation). */
 export interface SetBreakdownPreview {
   brokeSet: boolean;
   warning: string | null;

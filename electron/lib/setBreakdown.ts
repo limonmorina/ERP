@@ -1,11 +1,14 @@
+// Furniture set-breakdown and pricing helpers for HSM Furniture ERP.
+// Parses hyphenated set formats (e.g. "3-3-1"), allocates stock/leftovers, and computes TVSH/profit.
+
 /**
- * Furniture set breakdown helpers.
  * Set formats are hyphen-separated piece sizes, e.g. "3-3-1".
  * Matching is by piece-value multiset. Leftovers are packed back into complete sets when possible.
  */
 
 export type PieceMap = Record<string, number>;
 
+/** Parse "3-3-1" into an array of non-negative integer piece sizes. */
 export function parseSetFormat(format: string): number[] {
   return format
     .split('-')
@@ -20,6 +23,7 @@ export function parseSetFormat(format: string): number[] {
     });
 }
 
+/** Count how many pieces of each size appear in a set. */
 export function toPieceCounts(pieces: number[]): PieceMap {
   const map: PieceMap = {};
   for (const p of pieces) {
@@ -29,6 +33,7 @@ export function toPieceCounts(pieces: number[]): PieceMap {
   return map;
 }
 
+/** Deserialize leftover JSON; returns {} on empty or invalid input. */
 export function parseLeftovers(json: string | null | undefined): PieceMap {
   if (!json) return {};
   try {
@@ -39,6 +44,7 @@ export function parseLeftovers(json: string | null | undefined): PieceMap {
   }
 }
 
+/** Serialize leftovers, dropping zero counts; empty map becomes ''. */
 export function serializeLeftovers(map: PieceMap): string {
   const cleaned: PieceMap = {};
   for (const [k, v] of Object.entries(map)) {
@@ -47,13 +53,13 @@ export function serializeLeftovers(map: PieceMap): string {
   return Object.keys(cleaned).length ? JSON.stringify(cleaned) : '';
 }
 
-/** Human-readable leftovers: "1×3, 1×1" */
+/** Human-readable leftovers: "1x3, 1x1" */
 export function formatLeftoversDisplay(json: string | null | undefined): string {
   const map = parseLeftovers(json);
   const parts = Object.entries(map)
     .filter(([, v]) => v > 0)
     .sort(([a], [b]) => Number(b) - Number(a))
-    .map(([k, v]) => `${v}×${k}`);
+    .map(([k, v]) => `${v}x${k}`);
   return parts.length ? parts.join(', ') : '';
 }
 
@@ -109,7 +115,8 @@ export interface BreakdownResult {
 }
 
 /**
- * Consume requested combination from complete sets + leftovers, then repack leftovers.
+ * Consume a requested combination from complete sets + leftovers, then repack leftovers.
+ * Prefer whole-set consumption when the request matches the stock format exactly.
  */
 export function calculateSetBreakdown(
   stockSetFormat: string,
@@ -125,6 +132,7 @@ export function calculateSetBreakdown(
 
   const leftovers = parseLeftovers(leftoverJson);
 
+  // Fast path: identical multiset and no leftovers => consume whole sets only
   const sameShape =
     Object.keys(perSet).length === Object.keys(needOne).length &&
     Object.keys(perSet).every((k) => perSet[k] === needOne[k]);
@@ -159,6 +167,7 @@ export function calculateSetBreakdown(
 
   const keys = new Set([...Object.keys(need), ...Object.keys(available), ...Object.keys(perSet)]);
 
+  // For each needed piece size, open whole sets until demand is met
   for (const key of keys) {
     const required = need[key] ?? 0;
     if (required <= 0) continue;
@@ -214,7 +223,7 @@ export function calculateSetBreakdown(
   };
 }
 
-/** Put sold pieces back into inventory (used when deleting an order). */
+/** Put sold pieces back into inventory (used when deleting or returning an order). */
 export function restorePiecesToInventory(
   stockSetFormat: string,
   stockSets: number,
@@ -238,7 +247,7 @@ export function inventoryLineValue(
   const perSet = parseSetFormat(setFormat);
   const seatUnitsPerSet = perSet.reduce((a, b) => a + b, 0) || 1;
   const leftovers = parseLeftovers(leftoverJson);
-  // Leftovers keys are seat sizes ("3","1"); values are counts of those pieces.
+  // Leftover keys are seat sizes ("3","1"); values are counts of those pieces
   let leftoverSeatUnits = 0;
   for (const [size, count] of Object.entries(leftovers)) {
     leftoverSeatUnits += Number(size) * count;
@@ -249,14 +258,17 @@ export function inventoryLineValue(
 
 export const DEFAULT_TVSH_RATE = 0.18;
 
+/** Net amount from a TVSH-inclusive price. */
 export function extractNetFromInclusive(inclusive: number, rate = DEFAULT_TVSH_RATE): number {
   return inclusive / (1 + rate);
 }
 
+/** TVSH portion embedded in an inclusive price. */
 export function extractTvshFromInclusive(inclusive: number, rate = DEFAULT_TVSH_RATE): number {
   return inclusive - extractNetFromInclusive(inclusive, rate);
 }
 
+/** Simple net profit: inclusive sell revenue minus supplier cost and transport. */
 export function calculateNetProfit(
   sellingPriceInclusive: number,
   supplierCost: number,
@@ -267,8 +279,8 @@ export function calculateNetProfit(
 
 /**
  * Fair / entitled sell price for a requested set format from the full-set catalog price.
- * Smaller set → lower entitled price (piece worth). Larger set → higher.
- * This is NOT a customer discount — discount is only sellPrice < entitledPrice.
+ * Smaller set -> lower entitled price (piece worth). Larger set -> higher.
+ * This is NOT a customer discount - discount is only sellPrice < entitledPrice.
  */
 export function suggestUnitPrice(
   catalogPrice: number,
@@ -276,7 +288,7 @@ export function suggestUnitPrice(
   requestedFormat: string
 ): {
   entitled: number;
-  /** @deprecated use entitled — kept for older call sites */
+  /** @deprecated use entitled - kept for older call sites */
   suggested: number;
   catalog: number;
   ratio: number;
@@ -299,7 +311,7 @@ export function suggestUnitPrice(
       stockUnits,
       requestedUnits,
       kind: 'same',
-      note: 'I njëjti set i plotë — çmimi i justë është çmimi i inventarit.',
+      note: 'I njëjti set i plotë - çmimi i justë është çmimi i inventarit.',
     };
   }
   if (ratio < 1) {
@@ -326,6 +338,7 @@ export function suggestUnitPrice(
   };
 }
 
+/** Positive discount only when sell price is below the entitled/fair price. */
 export function customerDiscountAmount(
   entitledPrice: number,
   sellPrice: number,
@@ -334,7 +347,7 @@ export function customerDiscountAmount(
   return Math.max(0, (entitledPrice - sellPrice) * quantity);
 }
 
-export const PROFESSIONAL_WARRANTY = `GARANCIONI PROFESIONAL — HSM Furniture
+export const PROFESSIONAL_WARRANTY = `GARANCIONI PROFESIONAL - HSM Furniture
 
 1. Produktet garantohet për defekte të fabrikimit dhe materialeve, sipas kushteve të mëposhtme.
 2. Garancioni vlen vetëm me faturën origjinale dhe për blerësin e parë.

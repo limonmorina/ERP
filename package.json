@@ -1,7 +1,7 @@
 {
   "name": "hsm-furniture-erp",
   "version": "1.0.0",
-  "description": "Desktop ERP for HSM Furniture — inventory, orders, A4 invoices",
+  "description": "Desktop ERP for HSM Furniture - inventory, orders, A4 invoices",
   "main": "dist-electron/main.js",
   "author": "HSM Furniture",
   "license": "UNLICENSED",
@@ -34,6 +34,7 @@
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
     "electron-rebuild": "^3.2.9",
+    "png-to-ico": "^3.0.2",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.16",
     "typescript": "^5.7.2",
@@ -46,13 +47,19 @@
     "appId": "com.hsm.furniture.erp",
     "productName": "HSM Furniture ERP",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "dist/**/*",
       "dist-electron/**/*"
     ],
+    "asarUnpack": [
+      "**/*.node",
+      "**/better-sqlite3/**"
+    ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis"
       ]

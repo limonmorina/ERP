@@ -1,10 +1,13 @@
+// Database backup utilities for HSM Furniture ERP.
+// Copies the live SQLite file to the configured backup folder and prunes old copies.
+
 import fs from 'fs';
 import path from 'path';
 import { getDbPath, getDatabase } from './db';
 
 /**
  * Copies the live SQLite database to the configured backup directory.
- * Called automatically on application quit.
+ * Called automatically on application quit and via the backup:run IPC.
  */
 export function backupDatabase(): { success: boolean; path?: string; error?: string } {
   try {
@@ -21,7 +24,7 @@ export function backupDatabase(): { success: boolean; path?: string; error?: str
       fs.mkdirSync(backupDir, { recursive: true });
     }
 
-    // Checkpoint WAL so backup is consistent
+    // Flush WAL into the main DB so the copied file is consistent
     database.pragma('wal_checkpoint(TRUNCATE)');
 
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -30,7 +33,7 @@ export function backupDatabase(): { success: boolean; path?: string; error?: str
 
     fs.copyFileSync(source, dest);
 
-    // Keep last 30 backups
+    // Retain only the 30 most recent backup files
     const files = fs
       .readdirSync(backupDir)
       .filter((f) => f.startsWith('furniture-erp-backup-') && f.endsWith('.db'))
@@ -41,7 +44,7 @@ export function backupDatabase(): { success: boolean; path?: string; error?: str
       try {
         fs.unlinkSync(path.join(backupDir, old.name));
       } catch {
-        /* ignore */
+        /* ignore delete failures for old backups */
       }
     }
 

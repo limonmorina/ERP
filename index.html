@@ -1,8 +1,13 @@
 <!doctype html>
 <html lang="sq">
+  <!--
+    Electron renderer HTML shell for HSM Furniture ERP.
+    Loads Google fonts, sets a tight CSP, and bootstraps the Vite React entry.
+  -->
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Restrict origins; fonts need Google CDN; styles allow inline for Tailwind. -->
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:;"

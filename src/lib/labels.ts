@@ -1,3 +1,6 @@
+/**
+ * UI label maps: SQLite stores English status/category keys; the UI shows Albanian.
+ */
 import type { OrderStatus } from '../../electron/types';
 
 /** Status values stay English in SQLite; UI shows Albanian. */
@@ -17,6 +20,8 @@ export const CATEGORY_LABELS: Record<string, string> = {
   Mattresses: 'Dyshekë',
   Komodë: 'Komodë',
   'Coffee Tables': 'Tavolina kafeje',
+  Karrike: 'Karrike',
+  Chairs: 'Karrike',
 };
 
 export function categoryLabel(name: string): string {
