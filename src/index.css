@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply font-sans bg-ink-50 text-ink-950;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 0% -20%, rgba(79, 119, 96, 0.12), transparent),
+      radial-gradient(ellipse 60% 40% at 100% 0%, rgba(196, 92, 38, 0.08), transparent);
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply font-display tracking-tight;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition
+      focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600
+      disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-primary {
+    @apply btn bg-brand-700 text-white hover:bg-brand-800 shadow-sm;
+  }
+
+  .btn-secondary {
+    @apply btn bg-white text-ink-900 border border-ink-200 hover:bg-ink-100;
+  }
+
+  .btn-ghost {
+    @apply btn text-ink-700 hover:bg-ink-100;
+  }
+
+  .btn-danger {
+    @apply btn bg-accent text-white hover:brightness-95;
+  }
+
+  .field {
+    @apply flex flex-col gap-1.5;
+  }
+
+  .field label {
+    @apply text-xs font-medium uppercase tracking-wide text-ink-600;
+  }
+
+  .input {
+    @apply w-full rounded-md border border-ink-200 bg-white px-3 py-2 text-sm text-ink-950
+      shadow-sm placeholder:text-ink-400
+      focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20;
+  }
+
+  .panel {
+    @apply rounded-xl bg-white/90 shadow-panel border border-ink-100 backdrop-blur-sm;
+  }
+
+  .table-wrap {
+    @apply overflow-auto rounded-xl border border-ink-100 bg-white;
+  }
+
+  table.data {
+    @apply w-full text-sm text-left;
+  }
+
+  table.data th {
+    @apply px-4 py-3 text-xs font-semibold uppercase tracking-wide text-ink-500 bg-ink-50/80 border-b border-ink-100;
+  }
+
+  table.data td {
+    @apply px-4 py-3 border-b border-ink-50 align-middle;
+  }
+
+  table.data tr:hover td {
+    @apply bg-brand-50/40;
+  }
+
+  table.data tr.bg-emerald-50\/90:hover td,
+  table.data tr.bg-amber-50\/90:hover td {
+    @apply bg-transparent;
+  }
+}
+
+/* A4 invoice print styles */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  #invoice-print-root,
+  #invoice-print-root *,
+  .invoice-print-sheet,
+  .invoice-print-sheet * {
+    visibility: visible;
+  }
+
+  #invoice-print-root,
+  .invoice-print-sheet {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 210mm;
+    min-height: 297mm;
+    margin: 0;
+    padding: 0;
+    background: white;
+  }
+
+  .invoice-print-sheet ~ .invoice-print-sheet {
+    display: none !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}
+
+@page {
+  size: A4;
+  margin: 12mm;
+}
