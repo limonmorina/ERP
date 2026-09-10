@@ -116,6 +116,8 @@ export function registerOrderHandlers(): void {
         kapare: number;
         transport_fee: number;
         show_transport_on_invoice: boolean;
+        /** Made-to-order / custom job: bill the client but do not consume warehouse stock. */
+        is_custom_job?: boolean;
         custom_notes?: string;
         /** Optional manual override of calculated net profit. */
         net_profit?: number;
@@ -127,10 +129,11 @@ export function registerOrderHandlers(): void {
         .prepare('SELECT * FROM business_settings WHERE id = 1')
         .get() as BusinessSettings;
       const tvshRate = settings?.tvsh_rate ?? DEFAULT_TVSH_RATE;
+      const isCustomJob = Boolean(payload.is_custom_job);
 
       if (!payload.items?.length) throw new Error('Porosia duhet të ketë të paktën një artikull');
 
-      // Single transaction: validate stock, insert order/lines, then update inventory
+      // Single transaction: validate stock (unless custom job), insert order/lines, update inventory
       const create = db.transaction(() => {
         let subtotal = 0;
         let totalCost = 0;
@@ -138,7 +141,7 @@ export function registerOrderHandlers(): void {
         let anyBreak = false;
         const warnings: string[] = [];
         const lineRows: Array<{
-          inventory_item_id: number;
+          inventory_item_id: number | null;
           item_name: string;
           set_format_requested: string;
           quantity: number;
@@ -153,6 +156,50 @@ export function registerOrderHandlers(): void {
         }> = [];
 
         for (const line of payload.items) {
+          // Free-form custom job: any work outside standard warehouse sets
+          if (isCustomJob) {
+            const itemName = (line.item_name || '').trim();
+            if (!itemName) throw new Error('Përshkruani punën e personalizuar (emri / titulli)');
+            const qty = Math.max(1, Number(line.quantity) || 1);
+            const unitPrice = Number(line.unit_price ?? 0);
+            const unitCost = Number(line.unit_cost ?? 0);
+            if (unitPrice < 0 || unitCost < 0) {
+              throw new Error('Çmimet e punës së personalizuar nuk mund të jenë negative');
+            }
+            const entitledPrice =
+              line.entitled_price !== undefined && line.entitled_price !== null
+                ? Number(line.entitled_price)
+                : unitPrice;
+            const lineDiscount = customerDiscountAmount(entitledPrice, unitPrice, qty);
+            const lineTotal = unitPrice * qty;
+            const specs = (line.set_format_requested || '').trim() || 'punë e personalizuar';
+
+            subtotal += lineTotal;
+            totalCost += unitCost * qty;
+            discountTotal += lineDiscount;
+            warnings.push(`${itemName}: Punë e personalizuar - jashtë seteve standarde, stoku nuk ndryshon.`);
+
+            lineRows.push({
+              inventory_item_id: null,
+              item_name: itemName,
+              set_format_requested: specs,
+              quantity: qty,
+              unit_cost: unitCost,
+              list_price: entitledPrice,
+              unit_price: unitPrice,
+              discount_amount: lineDiscount,
+              line_total: lineTotal,
+              broke_set: 0,
+              stock_sets: 0,
+              leftover_pieces: '',
+            });
+            continue;
+          }
+
+          if (!line.inventory_item_id) {
+            throw new Error('Zgjidhni një artikull nga inventari për porosinë nga stoku');
+          }
+
           const item = db
             .prepare('SELECT * FROM inventory_items WHERE id = ?')
             .get(line.inventory_item_id) as InventoryItem | undefined;
@@ -167,8 +214,10 @@ export function registerOrderHandlers(): void {
           );
           if (!breakdown.feasible) throw new Error(`${item.name}: ${breakdown.message}`);
 
+          let brokeSet = false;
           if (breakdown.brokeSet) {
             anyBreak = true;
+            brokeSet = true;
             if (breakdown.warning) {
               warnings.push(
                 `${item.name}: ${breakdown.warning} Sete të plota të mbetura: ${breakdown.stockSetsAfter}.`
@@ -196,10 +245,8 @@ export function registerOrderHandlers(): void {
               : entitledPrice;
           if (unitPrice < 0) throw new Error('Çmimi i shitjes nuk mund të jetë negativ');
 
-          // True discount only if sold below the fair/entitled price for this combination
           const lineDiscount = customerDiscountAmount(entitledPrice, unitPrice, line.quantity);
           const lineTotal = unitPrice * line.quantity;
-          // Profit cost basis follows the requested combination worth, not full-set consumption
           const entitledCostPerCombo = suggestUnitPrice(
             item.cost_price,
             item.set_format,
@@ -221,7 +268,7 @@ export function registerOrderHandlers(): void {
             unit_price: unitPrice,
             discount_amount: lineDiscount,
             line_total: lineTotal,
-            broke_set: breakdown.brokeSet ? 1 : 0,
+            broke_set: brokeSet ? 1 : 0,
             stock_sets: breakdown.stockSetsAfter,
             leftover_pieces: serializeLeftovers(breakdown.leftoverAfter),
           });
@@ -231,6 +278,7 @@ export function registerOrderHandlers(): void {
         const total = subtotal + transport;
         const tvshAmount = extractTvshFromInclusive(subtotal, tvshRate);
         const remaining = Math.max(0, total - (payload.kapare || 0));
+        // Transport is charged to the client; it does not reduce shop profit
         const calculatedProfit = calculateNetProfit(subtotal, totalCost, transport);
         const netProfit =
           payload.net_profit !== undefined && payload.net_profit !== null
@@ -242,10 +290,10 @@ export function registerOrderHandlers(): void {
           .prepare(
             `INSERT INTO orders (
                order_number, customer_id, status, kapare, transport_fee,
-               show_transport_on_invoice, custom_notes, subtotal, tvsh_amount,
+               show_transport_on_invoice, is_custom_job, custom_notes, subtotal, tvsh_amount,
                total, remaining_balance, net_profit, discount_total,
                set_break_warning, set_break_message
-             ) VALUES (?, ?, 'Pending Delivery', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             ) VALUES (?, ?, 'Pending Delivery', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .run(
             orderNumber,
@@ -253,6 +301,7 @@ export function registerOrderHandlers(): void {
             payload.kapare || 0,
             transport,
             payload.show_transport_on_invoice ? 1 : 0,
+            isCustomJob ? 1 : 0,
             payload.custom_notes?.trim() ?? '',
             subtotal,
             tvshAmount,
@@ -260,7 +309,7 @@ export function registerOrderHandlers(): void {
             remaining,
             netProfit,
             discountTotal,
-            anyBreak ? 1 : 0,
+            anyBreak || isCustomJob ? 1 : 0,
             warnings.join(' ')
           );
 
@@ -292,7 +341,10 @@ export function registerOrderHandlers(): void {
             row.line_total,
             row.broke_set
           );
-          updateStock.run(row.stock_sets, row.leftover_pieces, row.inventory_item_id);
+          // Custom jobs are outside warehouse stock; stock sales update inventory
+          if (!isCustomJob && row.inventory_item_id != null) {
+            updateStock.run(row.stock_sets, row.leftover_pieces, row.inventory_item_id);
+          }
         }
 
         return orderId;
@@ -355,8 +407,12 @@ export function registerOrderHandlers(): void {
       }
 
       const apply = db.transaction(() => {
-        // Restore stock when marking Returned (once - only if not already returned)
-        if (payload.status === 'Returned' && order.status !== 'Returned') {
+        // Restore stock when marking Returned (skip custom jobs - stock was never taken)
+        if (
+          payload.status === 'Returned' &&
+          order.status !== 'Returned' &&
+          !order.is_custom_job
+        ) {
           const items = db
             .prepare('SELECT * FROM order_items WHERE order_id = ?')
             .all(payload.order_id) as OrderItem[];
@@ -366,6 +422,7 @@ export function registerOrderHandlers(): void {
              WHERE id = ?`
           );
           for (const line of items) {
+            if (!line.inventory_item_id) continue;
             const item = db
               .prepare('SELECT * FROM inventory_items WHERE id = ?')
               .get(line.inventory_item_id) as InventoryItem | undefined;
@@ -422,14 +479,15 @@ export function registerOrderHandlers(): void {
         .prepare('SELECT * FROM order_items WHERE order_id = ?')
         .all(orderId) as OrderItem[];
 
-      // Restore stock only if not already returned (return path already restored inventory)
-      if (order.status !== 'Returned') {
+      // Restore stock only for warehouse sales that were not already returned
+      if (order.status !== 'Returned' && !order.is_custom_job) {
         const updateStock = db.prepare(
           `UPDATE inventory_items
            SET stock_sets = ?, leftover_pieces = ?, updated_at = datetime('now')
            WHERE id = ?`
         );
         for (const line of items) {
+          if (!line.inventory_item_id) continue;
           const item = db
             .prepare('SELECT * FROM inventory_items WHERE id = ?')
             .get(line.inventory_item_id) as InventoryItem | undefined;

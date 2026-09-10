@@ -74,6 +74,53 @@ export function initDatabase(): Database.Database {
 }
 
 /**
+ * Rebuild order_items so inventory_item_id can be NULL (free-form custom jobs).
+ * SQLite cannot drop NOT NULL with a simple ALTER.
+ */
+function migrateOrderItemsNullableInventory(database: Database.Database): void {
+  const cols = database.prepare(`PRAGMA table_info(order_items)`).all() as Array<{
+    name: string;
+    notnull: number;
+  }>;
+  const inv = cols.find((c) => c.name === 'inventory_item_id');
+  if (!inv || inv.notnull === 0) return;
+
+  database.exec(`PRAGMA foreign_keys = OFF`);
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS order_items_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      inventory_item_id INTEGER REFERENCES inventory_items(id),
+      item_name TEXT NOT NULL,
+      set_format_requested TEXT NOT NULL DEFAULT '',
+      quantity INTEGER NOT NULL DEFAULT 1,
+      unit_cost REAL NOT NULL DEFAULT 0,
+      list_price REAL NOT NULL DEFAULT 0,
+      unit_price REAL NOT NULL DEFAULT 0,
+      discount_amount REAL NOT NULL DEFAULT 0,
+      line_total REAL NOT NULL DEFAULT 0,
+      broke_set INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO order_items_new (
+      id, order_id, inventory_item_id, item_name, set_format_requested,
+      quantity, unit_cost, list_price, unit_price, discount_amount, line_total, broke_set
+    )
+    SELECT
+      id, order_id, inventory_item_id, item_name, set_format_requested,
+      quantity, unit_cost,
+      COALESCE(list_price, unit_price, 0),
+      unit_price,
+      COALESCE(discount_amount, 0),
+      line_total, broke_set
+    FROM order_items;
+    DROP TABLE order_items;
+    ALTER TABLE order_items_new RENAME TO order_items;
+    CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+  `);
+  database.exec(`PRAGMA foreign_keys = ON`);
+}
+
+/**
  * Additive migrations for columns introduced after the initial schema.
  * Safe to re-run: only ALTER when the column is missing.
  */
@@ -101,6 +148,17 @@ function migrateSchema(database: Database.Database): void {
   if (!inventoryNames.has('image_path')) {
     database.exec(`ALTER TABLE inventory_items ADD COLUMN image_path TEXT NOT NULL DEFAULT ''`);
   }
+
+  const orderTableCols = database
+    .prepare(`PRAGMA table_info(orders)`)
+    .all() as Array<{ name: string }>;
+  const orderTableNames = new Set(orderTableCols.map((c) => c.name));
+  if (!orderTableNames.has('is_custom_job')) {
+    database.exec(`ALTER TABLE orders ADD COLUMN is_custom_job INTEGER NOT NULL DEFAULT 0`);
+  }
+
+  // Allow free-form custom jobs without linking to an inventory row
+  migrateOrderItemsNullableInventory(database);
 
   // Upgrade short warranty to professional text if still the old one-liner
   const settings = database
@@ -175,6 +233,7 @@ function applyInlineSchema(database: Database.Database): void {
       kapare REAL NOT NULL DEFAULT 0,
       transport_fee REAL NOT NULL DEFAULT 0,
       show_transport_on_invoice INTEGER NOT NULL DEFAULT 1,
+      is_custom_job INTEGER NOT NULL DEFAULT 0,
       custom_notes TEXT DEFAULT '',
       subtotal REAL NOT NULL DEFAULT 0,
       tvsh_amount REAL NOT NULL DEFAULT 0,
@@ -193,9 +252,9 @@ function applyInlineSchema(database: Database.Database): void {
     CREATE TABLE IF NOT EXISTS order_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-      inventory_item_id INTEGER NOT NULL REFERENCES inventory_items(id),
+      inventory_item_id INTEGER REFERENCES inventory_items(id),
       item_name TEXT NOT NULL,
-      set_format_requested TEXT NOT NULL,
+      set_format_requested TEXT NOT NULL DEFAULT '',
       quantity INTEGER NOT NULL DEFAULT 1,
       unit_cost REAL NOT NULL DEFAULT 0,
       list_price REAL NOT NULL DEFAULT 0,

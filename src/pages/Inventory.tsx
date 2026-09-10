@@ -328,15 +328,18 @@ export function InventoryPage() {
             </select>
           </div>
           <div className="field">
-            <label htmlFor="set_format">Formati i setit</label>
+            <label htmlFor="set_format">Formati i setit (ose metra për kënd)</label>
             <input
               id="set_format"
               className="input font-mono"
               required
               value={form.set_format}
               onChange={(e) => setForm({ ...form, set_format: e.target.value })}
-              placeholder="3-3-1"
+              placeholder="3-3-1 ose 3.2-3.2"
             />
+            <p className="mt-1 text-[11px] text-ink-500">
+              Decimale të lejuara: 3.2-3.2 = 3.2 m + 3.2 m
+            </p>
           </div>
           <div className="field">
             <label htmlFor="stock_sets">Stoku (sete të plota)</label>

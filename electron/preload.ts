@@ -80,6 +80,7 @@ const api = {
       kapare: number;
       transport_fee: number;
       show_transport_on_invoice: boolean;
+      is_custom_job?: boolean;
       custom_notes?: string;
       net_profit?: number;
       items: OrderItemInput[];

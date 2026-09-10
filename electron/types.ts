@@ -47,13 +47,18 @@ export interface Customer {
 }
 
 export interface OrderItemInput {
-  inventory_item_id: number;
+  /** Null/omitted for free-form custom jobs (outside warehouse stock). */
+  inventory_item_id?: number | null;
+  /** Display name; required for custom jobs, otherwise taken from inventory. */
+  item_name?: string;
   set_format_requested: string;
   quantity: number;
   /** Optional manual fair/entitled price baseline for this combination. */
   entitled_price?: number;
   /** Actual selling price for this order (allows per-customer discount). */
   unit_price?: number;
+  /** Supplier / job cost for profit (especially custom jobs). */
+  unit_cost?: number;
 }
 
 export interface Order {
@@ -67,6 +72,8 @@ export interface Order {
   kapare: number;
   transport_fee: number;
   show_transport_on_invoice: number;
+  /** 1 = custom / made-to-order job: does not consume warehouse stock. */
+  is_custom_job: number;
   custom_notes: string;
   subtotal: number;
   tvsh_amount: number;
@@ -84,7 +91,7 @@ export interface Order {
 export interface OrderItem {
   id: number;
   order_id: number;
-  inventory_item_id: number;
+  inventory_item_id: number | null;
   item_name: string;
   set_format_requested: string;
   quantity: number;

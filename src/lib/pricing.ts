@@ -4,13 +4,17 @@
  * when the sell price is below that fair amount.
  */
 
-/** Parse formats like "3-3-1" into piece counts. */
+/** Parse formats like "3-3-1" or corner meters "3.2-3.2" (decimals kept). */
 function parseSetFormat(format: string): number[] {
   return format
     .split('-')
-    .map((p) => p.trim())
+    .map((p) => p.trim().replace(',', '.'))
     .filter(Boolean)
-    .map((p) => Math.floor(Number(p) || 0));
+    .map((p) => {
+      const n = Number(p);
+      if (!Number.isFinite(n) || n < 0) return 0;
+      return Math.round(n * 100) / 100;
+    });
 }
 
 export type PriceSuggestion = {
@@ -58,7 +62,7 @@ export function suggestUnitPrice(
       stockUnits,
       requestedUnits,
       kind: 'smaller',
-      note: `Kombinimi ${requestedFormat} vlen më pak se seti i plotë ${stockSetFormat} (${requestedUnits}/${stockUnits} njësi). Kjo NUK është zbritje - është çmimi i justë i pjesëve.`,
+      note: `Kombinimi ${requestedFormat} vlen më pak se seti i plotë ${stockSetFormat} (${requestedUnits}/${stockUnits} njësi/metra). Kjo NUK është zbritje - është çmimi i justë i pjesëve.`,
     };
   }
   return {
@@ -68,7 +72,7 @@ export function suggestUnitPrice(
     stockUnits,
     requestedUnits,
     kind: 'larger',
-    note: `Kombinimi ${requestedFormat} është më i madh se seti ${stockSetFormat} (${requestedUnits}/${stockUnits} njësi). Çmimi i justë është më i lartë - jo “shtesë”, por vlera e setit.`,
+    note: `Kombinimi ${requestedFormat} është më i madh se seti ${stockSetFormat} (${requestedUnits}/${stockUnits} njësi/metra). Çmimi i justë është më i lartë - jo “shtesë”, por vlera e setit.`,
   };
 }
 

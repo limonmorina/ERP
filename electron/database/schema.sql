@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS orders (
   kapare REAL NOT NULL DEFAULT 0, -- deposit / down payment
   transport_fee REAL NOT NULL DEFAULT 0,
   show_transport_on_invoice INTEGER NOT NULL DEFAULT 1,
+  is_custom_job INTEGER NOT NULL DEFAULT 0, -- 1 = made-to-order; do not consume stock
   custom_notes TEXT DEFAULT '', -- e.g. corner dimensions
   subtotal REAL NOT NULL DEFAULT 0,
   tvsh_amount REAL NOT NULL DEFAULT 0,
@@ -92,9 +93,9 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE TABLE IF NOT EXISTS order_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-  inventory_item_id INTEGER NOT NULL REFERENCES inventory_items(id),
+  inventory_item_id INTEGER REFERENCES inventory_items(id), -- null = free-form custom job
   item_name TEXT NOT NULL,
-  set_format_requested TEXT NOT NULL, -- e.g. "3-3-3-1"
+  set_format_requested TEXT NOT NULL DEFAULT '', -- set format OR free-text specs
   quantity INTEGER NOT NULL DEFAULT 1,
   unit_cost REAL NOT NULL DEFAULT 0,
   list_price REAL NOT NULL DEFAULT 0, -- entitled/fair price baseline

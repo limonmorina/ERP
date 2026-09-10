@@ -232,6 +232,12 @@ function InvoiceDocument({
         </div>
       )}
 
+      {order.is_custom_job === 1 && (
+        <div className="mt-4 rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-900">
+          Punë e personalizuar - jashtë seteve standarde të magazinës.
+        </div>
+      )}
+
       <table className="mt-6 w-full text-sm">
         <thead>
           <tr className="border-b-2 border-ink-900 text-left text-xs uppercase tracking-wide">

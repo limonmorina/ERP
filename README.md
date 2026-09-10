@@ -79,8 +79,9 @@ PROJECT.md                Full technical guide
 - Retail / list prices are **TVSH-inclusive** (default 18%).
 - Stock is held as complete sets plus leftover pieces after custom combinations are sold.
 - Fair / entitled price is used internally for staff pricing and profit; it is **not** shown on the customer invoice.
-- Net profit per order is roughly: sell - proportional supplier cost - transport (manual override allowed).
-- Returned and deleted orders restore stock when applicable.
+- Net profit per order is roughly: sell - proportional supplier cost (manual override allowed). Transport is charged to the client and does not reduce profit.
+- Custom jobs (punë e personalizuar) are any work outside standard warehouse sets (corner meters, special sizes, made-to-order, etc.). They use free-form description and prices, and never deduct inventory.
+- Returned and deleted warehouse orders restore stock when applicable (custom jobs never touched stock).
 
 ## License
 

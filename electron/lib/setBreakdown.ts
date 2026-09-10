@@ -8,26 +8,27 @@
 
 export type PieceMap = Record<string, number>;
 
-/** Parse "3-3-1" into an array of non-negative integer piece sizes. */
+/** Parse "3-3-1" or meter corner formats like "3.2-3.2" into numeric segments (keeps decimals). */
 export function parseSetFormat(format: string): number[] {
   return format
     .split('-')
-    .map((p) => p.trim())
+    .map((p) => p.trim().replace(',', '.'))
     .filter(Boolean)
     .map((p) => {
       const n = Number(p);
       if (!Number.isFinite(n) || n < 0) {
         throw new Error(`Invalid set format segment: "${p}" in "${format}"`);
       }
-      return Math.floor(n);
+      // Keep centimeters as decimals (3.2 m), do not floor to 3
+      return Math.round(n * 100) / 100;
     });
 }
 
-/** Count how many pieces of each size appear in a set. */
+/** Count how many pieces of each size appear in a set. Keys keep decimal sizes as strings. */
 export function toPieceCounts(pieces: number[]): PieceMap {
   const map: PieceMap = {};
   for (const p of pieces) {
-    const key = String(p);
+    const key = String(Math.round(p * 100) / 100);
     map[key] = (map[key] ?? 0) + 1;
   }
   return map;
@@ -268,13 +269,13 @@ export function extractTvshFromInclusive(inclusive: number, rate = DEFAULT_TVSH_
   return inclusive - extractNetFromInclusive(inclusive, rate);
 }
 
-/** Simple net profit: inclusive sell revenue minus supplier cost and transport. */
+/** Net profit: sell revenue minus supplier cost. Transport is paid by the client and does not reduce shop profit. */
 export function calculateNetProfit(
   sellingPriceInclusive: number,
   supplierCost: number,
-  transportFee: number
+  _transportFee = 0
 ): number {
-  return sellingPriceInclusive - supplierCost - transportFee;
+  return sellingPriceInclusive - supplierCost;
 }
 
 /**

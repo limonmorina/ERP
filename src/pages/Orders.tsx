@@ -87,13 +87,16 @@ export function OrdersPage() {
 
   const [orderForm, setOrderForm] = useState({
     inventory_item_id: 0,
+    custom_item_name: '',
     set_format_requested: '3-3-1',
     quantity: 1,
     entitled_price: 0,
     unit_price: 0,
+    unit_cost: 0,
     kapare: 0,
     transport_fee: 0,
     show_transport_on_invoice: true,
+    is_custom_job: false,
     custom_notes: '',
   });
 
@@ -122,8 +125,11 @@ export function OrdersPage() {
     orderForm.quantity
   );
 
-  // Proportional cost for the requested format (same ratio logic as selling price).
+  // Proportional cost for warehouse sales; custom jobs use the manual unit_cost field.
   const calculatedCost = useMemo(() => {
+    if (orderForm.is_custom_job) {
+      return (Number(orderForm.unit_cost) || 0) * orderForm.quantity;
+    }
     if (!selectedItem) return 0;
     try {
       return (
@@ -136,11 +142,17 @@ export function OrdersPage() {
     } catch {
       return selectedItem.cost_price * orderForm.quantity;
     }
-  }, [selectedItem, orderForm.set_format_requested, orderForm.quantity]);
+  }, [
+    orderForm.is_custom_job,
+    orderForm.unit_cost,
+    selectedItem,
+    orderForm.set_format_requested,
+    orderForm.quantity,
+  ]);
 
   const calculatedRevenue = orderForm.unit_price * orderForm.quantity;
-  const calculatedProfit =
-    calculatedRevenue - calculatedCost - (orderForm.transport_fee || 0);
+  // Transport is paid by the client; it is not a shop expense and does not reduce profit
+  const calculatedProfit = calculatedRevenue - calculatedCost;
   const displayProfit = profitManual && manualProfit !== null ? manualProfit : calculatedProfit;
 
   // Keep manual profit field in sync unless the user overrode it.
@@ -260,9 +272,22 @@ export function OrdersPage() {
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
 
-  /** Dry-run stock impact for the line item currently in the form. */
+  /** Dry-run stock impact for warehouse sales only (custom jobs skip stock). */
   async function previewLine() {
     if (!hasErpBridge() || !orderForm.inventory_item_id) return;
+    if (orderForm.is_custom_job) {
+      setBreakdownPreview({
+        brokeSet: false,
+        warning: null,
+        feasible: true,
+        message:
+          'Punë e personalizuar: stoku i seteve të plota në magazinë nuk ndryshon. Porosia porositet ndryshe.',
+        setsConsumed: 0,
+        stockSetsAfter: selectedItem?.stock_sets ?? 0,
+        leftoverAfter: {},
+      });
+      return;
+    }
     const result = await window.erp.inventory.previewBreakdown({
       inventory_item_id: orderForm.inventory_item_id,
       set_format_requested: orderForm.set_format_requested,
@@ -289,17 +314,31 @@ export function OrdersPage() {
         kapare: Number(orderForm.kapare),
         transport_fee: Number(orderForm.transport_fee),
         show_transport_on_invoice: orderForm.show_transport_on_invoice,
+        is_custom_job: orderForm.is_custom_job,
         custom_notes: orderForm.custom_notes,
         net_profit: Number(displayProfit),
-        items: [
-          {
-            inventory_item_id: orderForm.inventory_item_id,
-            set_format_requested: orderForm.set_format_requested,
-            quantity: orderForm.quantity,
-            entitled_price: Number(orderForm.entitled_price || entitledPrice),
-            unit_price: Number(orderForm.unit_price),
-          },
-        ],
+        items: orderForm.is_custom_job
+          ? [
+              {
+                inventory_item_id: null,
+                item_name: orderForm.custom_item_name.trim(),
+                set_format_requested:
+                  orderForm.set_format_requested.trim() || 'punë e personalizuar',
+                quantity: orderForm.quantity,
+                unit_price: Number(orderForm.unit_price),
+                unit_cost: Number(orderForm.unit_cost),
+                entitled_price: Number(orderForm.unit_price),
+              },
+            ]
+          : [
+              {
+                inventory_item_id: orderForm.inventory_item_id,
+                set_format_requested: orderForm.set_format_requested,
+                quantity: orderForm.quantity,
+                entitled_price: Number(orderForm.entitled_price || entitledPrice),
+                unit_price: Number(orderForm.unit_price),
+              },
+            ],
       });
 
       if (order.set_break_warning) {
@@ -377,20 +416,56 @@ export function OrdersPage() {
             ulët se ai i justë
           </p>
         </div>
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={() => {
-            setShowForm((v) => !v);
-            setPriceManual(false);
-            setFairManual(false);
-            setProfitManual(false);
-            setManualProfit(null);
-          }}
-        >
-          <Plus size={16} />
-          Porosi e re
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => {
+              setOrderForm((f) => ({
+                ...f,
+                is_custom_job: false,
+                custom_item_name: '',
+                set_format_requested: '3-3-1',
+                unit_cost: 0,
+              }));
+              setShowForm(true);
+              setBreakdownPreview(null);
+              setPriceManual(false);
+              setFairManual(false);
+              setProfitManual(false);
+              setManualProfit(null);
+            }}
+          >
+            <Plus size={16} />
+            Porosi nga stoku
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              setOrderForm((f) => ({
+                ...f,
+                is_custom_job: true,
+                inventory_item_id: 0,
+                custom_item_name: '',
+                set_format_requested: '',
+                entitled_price: 0,
+                unit_price: 0,
+                unit_cost: 0,
+                quantity: 1,
+              }));
+              setShowForm(true);
+              setBreakdownPreview(null);
+              setPriceManual(true);
+              setFairManual(true);
+              setProfitManual(false);
+              setManualProfit(null);
+            }}
+          >
+            <Plus size={16} />
+            Punë e personalizuar
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -447,6 +522,19 @@ export function OrdersPage() {
       {/* New-order form: customer + line item + pricing + payment fields */}
       {showForm && (
         <form onSubmit={onSubmit} className="panel space-y-6 p-5">
+          <div className="rounded-lg border border-ink-200 bg-ink-50 px-4 py-3">
+            <h3 className="text-lg font-semibold text-ink-950">
+              {orderForm.is_custom_job
+                ? 'Punë e personalizuar (custom job)'
+                : 'Porosi nga stoku i magazinës'}
+            </h3>
+            <p className="mt-1 text-sm text-ink-600">
+              {orderForm.is_custom_job
+                ? 'Çdo punë jashtë seteve standarde të magazinës: kënde me metra, masa speciale, porosi të porositura, etj. Stoku i seteve të plota nuk preket.'
+                : 'Heq nga stoku i seteve të plota. Formati tipik i setit: 3-3-1.'}
+            </p>
+          </div>
+
           <div className="flex flex-wrap items-center gap-4">
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -550,6 +638,88 @@ export function OrdersPage() {
             </div>
           )}
 
+          {orderForm.is_custom_job ? (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="field md:col-span-2 xl:col-span-3">
+                <label>Emri / përshkrimi i punës</label>
+                <input
+                  className="input"
+                  required
+                  value={orderForm.custom_item_name}
+                  onChange={(e) =>
+                    setOrderForm({ ...orderForm, custom_item_name: e.target.value })
+                  }
+                  placeholder="P.sh. Kënd divani 3.2-3.2, tavolinë speciale, karrike me masa…"
+                />
+              </div>
+              <div className="field">
+                <label>Sasia</label>
+                <input
+                  type="number"
+                  min={1}
+                  className="input"
+                  value={orderForm.quantity}
+                  onChange={(e) =>
+                    setOrderForm({ ...orderForm, quantity: Number(e.target.value) })
+                  }
+                />
+              </div>
+              <div className="field md:col-span-2 xl:col-span-4">
+                <label>Specifikime / dimensione (opsionale)</label>
+                <input
+                  className="input"
+                  value={orderForm.set_format_requested}
+                  onChange={(e) =>
+                    setOrderForm({
+                      ...orderForm,
+                      set_format_requested: e.target.value,
+                    })
+                  }
+                  placeholder="Çfarëdo: 3.2-3.2 m, 200x90 cm, ngjyra, materiali…"
+                />
+                <p className="mt-1 text-[11px] text-ink-500">
+                  Nuk është e detyrueshme të jetë format seti. Shkruani çfarë i duhet klientit.
+                </p>
+              </div>
+              <div className="field">
+                <label>Kostoja juaj (€)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  className="input"
+                  required
+                  value={orderForm.unit_cost}
+                  onChange={(e) =>
+                    setOrderForm({ ...orderForm, unit_cost: Number(e.target.value) })
+                  }
+                />
+              </div>
+              <div className="field">
+                <label>Çmimi i shitjes (€)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  className="input"
+                  required
+                  value={orderForm.unit_price}
+                  onChange={(e) =>
+                    setOrderForm({ ...orderForm, unit_price: Number(e.target.value) })
+                  }
+                />
+              </div>
+              <div className="field md:col-span-2">
+                <label>Fitimi i llogaritur</label>
+                <p className="input flex items-center bg-ink-50 font-semibold text-brand-800">
+                  {formatEuro(displayProfit)}
+                </p>
+                <p className="mt-1 text-[11px] text-ink-500">
+                  Shitja - kostoja (transporti e paguan klienti, nuk ul fitimin).
+                </p>
+              </div>
+            </div>
+          ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div className="field md:col-span-2">
               <label>Artikulli nga inventari</label>
@@ -566,7 +736,7 @@ export function OrdersPage() {
                 <div className="min-w-0 flex-1">
               <select
                 className="input"
-                required
+                required={!orderForm.is_custom_job}
                 value={orderForm.inventory_item_id}
                 onChange={(e) => {
                   const id = Number(e.target.value);
@@ -589,6 +759,7 @@ export function OrdersPage() {
                   });
                 }}
               >
+                <option value={0}>Zgjidhni…</option>
                 {items.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name} · {item.set_format} · {item.stock_sets} sete të plota
@@ -620,6 +791,7 @@ export function OrdersPage() {
                     previewLine().catch(() => undefined);
                   }
                 }}
+                placeholder="3-3-1"
               />
             </div>
             <div className="field">
@@ -635,8 +807,10 @@ export function OrdersPage() {
               />
             </div>
           </div>
+          )}
 
-          {/* Pricing panel: catalog vs fair vs sell price, discount, profit */}
+          {/* Pricing panel: catalog vs fair vs sell price, discount, profit (warehouse sales only) */}
+          {!orderForm.is_custom_job && (
           <div className="rounded-xl border border-ink-200 bg-ink-50/80 p-4">
             <h3 className="text-sm font-semibold text-ink-900">
               Çmimi i justë vs zbritja e klientit
@@ -801,8 +975,9 @@ export function OrdersPage() {
                   </button>
                 </div>
                 <p className="mt-1 text-[11px] text-ink-600">
-                  Auto: shitja − kostoja e justë − transporti = {formatEuro(calculatedProfit)}
+                  Auto: shitja - kostoja e justë = {formatEuro(calculatedProfit)}
                   {profitManual ? ' · (ndryshuar me dorë)' : ''}
+                  . Transporti e paguan klienti (nuk ul fitimin).
                 </p>
               </div>
             </div>
@@ -811,6 +986,7 @@ export function OrdersPage() {
               <p className="mt-3 text-xs text-ink-700">{priceHint.note}</p>
             )}
           </div>
+          )}
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div className="field">
@@ -841,6 +1017,9 @@ export function OrdersPage() {
                   })
                 }
               />
+              <p className="mt-1 text-[11px] text-ink-500">
+                E paguan klienti. Shtohet në totalin e faturës, jo në shpenzimet e dyqanit.
+              </p>
             </div>
             <div className="field justify-end xl:col-span-2">
               <label className="flex items-center gap-3 pt-6 text-sm normal-case tracking-normal">
@@ -873,24 +1052,32 @@ export function OrdersPage() {
               </label>
             </div>
             <div className="field md:col-span-2 xl:col-span-4">
-              <label>Shënime - Këndë me dimensione</label>
+              <label>Shënime shtesë</label>
               <textarea
                 className="input min-h-[72px]"
                 value={orderForm.custom_notes}
                 onChange={(e) =>
                   setOrderForm({ ...orderForm, custom_notes: e.target.value })
                 }
-                placeholder="Dimensionet e këndit / specifikimet…"
+                placeholder={
+                  orderForm.is_custom_job
+                    ? 'Detaje ekstra për punën e personalizuar…'
+                    : 'Dimensionet e këndit / specifikimet…'
+                }
               />
             </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn-secondary" onClick={previewLine}>
-              Parashiko ndarjen e setit
-            </button>
+            {!orderForm.is_custom_job && (
+              <button type="button" className="btn-secondary" onClick={previewLine}>
+                Parashiko ndarjen e setit
+              </button>
+            )}
             <button type="submit" className="btn-primary">
-              Vendos porosinë
+              {orderForm.is_custom_job
+                ? 'Ruaj punën e personalizuar'
+                : 'Vendos porosinë'}
             </button>
             <button
               type="button"
@@ -951,7 +1138,15 @@ export function OrdersPage() {
                 <tr key={order.id} className={rowTone(order.status)}>
                   <td className="font-mono text-xs">
                     {order.order_number}
-                    {order.set_break_warning === 1 && (
+                    {order.is_custom_job === 1 && (
+                      <span
+                        className="ml-2 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-800"
+                        title="Punë e personalizuar - stoku nuk u prek"
+                      >
+                        Custom
+                      </span>
+                    )}
+                    {order.set_break_warning === 1 && !order.is_custom_job && (
                       <span className="ml-2 text-accent" title={order.set_break_message}>
                         Kujdes: ndarje seti
                       </span>
