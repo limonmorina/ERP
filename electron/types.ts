@@ -141,7 +141,11 @@ export interface DiscountLogRow {
 /** Aggregated metrics returned by the analytics dashboard IPC. */
 export interface DashboardMetrics {
   monthlyRevenue: number;
+  /** Delivered order profits minus monthly expenses. */
   netProfit: number;
+  /** Sum of delivered order net_profit before expenses. */
+  orderProfit: number;
+  monthlyExpenses: number;
   monthlyDiscount: number;
   inventoryWorth: number;
   topSellingSets: Array<{ name: string; qty: number; revenue: number }>;
@@ -158,6 +162,17 @@ export interface DashboardMetrics {
     returned_at: string;
   }>;
   discountLog: DiscountLogRow[];
+  recentExpenses: Expense[];
+}
+
+export interface Expense {
+  id: number;
+  category: string;
+  description: string;
+  amount: number;
+  expense_date: string;
+  created_at: string;
+  updated_at: string;
 }
 
 /** Result of a dry-run set-breakdown preview (no stock mutation). */

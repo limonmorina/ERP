@@ -10,10 +10,11 @@ For architecture details, database paths, and business rules, see **[PROJECT.md]
 
 | Area | Capabilities |
 |------|----------------|
-| **Inventory** | Add, edit, and soft-delete products; categories (including **Karrike** / chairs); set formats like `3-3-1`; leftover piece tracking; set-break preview; **product photos** to tell apart items with the same name |
-| **Orders** | Customers, kapare, remaining balance, transport (optional on invoice), custom notes, status workflow (pending / delivered / returned), fair-price math for staff, client discount when sell price is below fair price, editable profit |
-| **Dashboard** | Monthly revenue, net profit, inventory worth at cost, top sets, deliveries, returns |
-| **Invoices** | Kosovo A4 layout, IBAN, TVSH (inclusive pricing), warranty and signature lines, HSM logo; clients see sell price only (fair price is hidden) |
+| **Inventory** | Add, edit, and soft-delete products; categories (including **Karrike** / chairs); set formats like `3-3-1` or meters `3.2-3.2`; leftover piece tracking; set-break preview; **product photos** |
+| **Orders** | Multi-item lines, edit pending orders, kapare, transport (client-paid), discounts, status workflow, custom jobs outside warehouse stock |
+| **Expenses** | Naftë and free-text expenses; subtracted from dashboard net profit |
+| **Dashboard** | Monthly revenue and order profit only for **Delivered** orders; expenses reduce net profit; inventory worth; top sets; deliveries; returns |
+| **Invoices** | Kosovo A4 layout, IBAN, TVSH, warranty, HSM logo; clients see sell price only (fair price hidden) |
 | **Brand** | Logo in the app sidebar/header, on invoices, and as the Windows desktop icon |
 | **Backup** | Automatic SQLite backup on quit, plus manual backup from the sidebar |
 
@@ -77,11 +78,10 @@ PROJECT.md                Full technical guide
 ## Business notes
 
 - Retail / list prices are **TVSH-inclusive** (default 18%).
-- Stock is held as complete sets plus leftover pieces after custom combinations are sold.
-- Fair / entitled price is used internally for staff pricing and profit; it is **not** shown on the customer invoice.
-- Net profit per order is roughly: sell - proportional supplier cost (manual override allowed). Transport is charged to the client and does not reduce profit.
-- Custom jobs (punë e personalizuar) are any work outside standard warehouse sets (corner meters, special sizes, made-to-order, etc.). They use free-form description and prices, and never deduct inventory.
-- Returned and deleted warehouse orders restore stock when applicable (custom jobs never touched stock).
+- Profit = sell after discount - cost. Kapare is only a prepayment. Transport is client-paid and does not reduce profit.
+- Monthly dashboard revenue and order profit count only **Delivered** orders. Expenses (Naftë, etc.) reduce net profit.
+- Custom jobs never deduct warehouse stock.
+- Returned and deleted warehouse orders restore stock when applicable.
 
 ## License
 

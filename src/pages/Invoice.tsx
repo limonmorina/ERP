@@ -242,7 +242,7 @@ function InvoiceDocument({
         <thead>
           <tr className="border-b-2 border-ink-900 text-left text-xs uppercase tracking-wide">
             <th className="py-2 pr-2">Artikulli</th>
-            <th className="py-2 pr-2">Seti</th>
+            <th className="py-2 pr-2">Seti / Spec.</th>
             <th className="py-2 pr-2 text-right">Sasia</th>
             <th className="py-2 pr-2 text-right">Çmimi</th>
             <th className="py-2 text-right">Totali</th>

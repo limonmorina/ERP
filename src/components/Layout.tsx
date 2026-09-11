@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Package,
   ShoppingCart,
+  Wallet,
   DatabaseBackup,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -17,6 +18,7 @@ const nav = [
   { to: '/', label: 'Paneli', icon: LayoutDashboard, end: true },
   { to: '/inventory', label: 'Inventari', icon: Package },
   { to: '/orders', label: 'Porositë', icon: ShoppingCart },
+  { to: '/expenses', label: 'Shpenzimet', icon: Wallet },
 ];
 
 export function AppLayout() {

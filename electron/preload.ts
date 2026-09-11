@@ -7,9 +7,11 @@ import type {
   Category,
   Customer,
   DashboardMetrics,
+  Expense,
   InventoryItem,
   InvoicePayload,
   Order,
+  OrderItem,
   OrderItemInput,
   OrderStatus,
   SetBreakdownPreview,
@@ -73,7 +75,7 @@ const api = {
     list: (): Promise<Order[]> => ipcRenderer.invoke('orders:list'),
     get: (
       orderId: number
-    ): Promise<{ order: Order; items: unknown[]; customer: Customer }> =>
+    ): Promise<{ order: Order; items: OrderItem[]; customer: Customer }> =>
       ipcRenderer.invoke('orders:get', orderId),
     create: (payload: {
       customer_id: number;
@@ -85,6 +87,17 @@ const api = {
       net_profit?: number;
       items: OrderItemInput[];
     }): Promise<Order> => ipcRenderer.invoke('orders:create', payload),
+    update: (payload: {
+      order_id: number;
+      customer_id: number;
+      kapare: number;
+      transport_fee: number;
+      show_transport_on_invoice: boolean;
+      is_custom_job?: boolean;
+      custom_notes?: string;
+      net_profit?: number;
+      items: OrderItemInput[];
+    }): Promise<Order> => ipcRenderer.invoke('orders:update', payload),
     updateStatus: (payload: {
       order_id: number;
       status: OrderStatus;
@@ -95,6 +108,24 @@ const api = {
     }): Promise<Order> => ipcRenderer.invoke('orders:updateProfit', payload),
     delete: (orderId: number): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('orders:delete', orderId),
+  },
+  expenses: {
+    list: (): Promise<Expense[]> => ipcRenderer.invoke('expenses:list'),
+    create: (payload: {
+      category: string;
+      description?: string;
+      amount: number;
+      expense_date?: string;
+    }): Promise<Expense> => ipcRenderer.invoke('expenses:create', payload),
+    update: (payload: {
+      id: number;
+      category?: string;
+      description?: string;
+      amount?: number;
+      expense_date?: string;
+    }): Promise<Expense> => ipcRenderer.invoke('expenses:update', payload),
+    delete: (id: number): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('expenses:delete', id),
   },
   invoices: {
     getForOrder: (orderId: number): Promise<InvoicePayload> =>

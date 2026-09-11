@@ -160,6 +160,19 @@ function migrateSchema(database: Database.Database): void {
   // Allow free-form custom jobs without linking to an inventory row
   migrateOrderItemsNullableInventory(database);
 
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category TEXT NOT NULL DEFAULT 'Tjetër',
+      description TEXT NOT NULL DEFAULT '',
+      amount REAL NOT NULL DEFAULT 0,
+      expense_date TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date);
+  `);
+
   // Upgrade short warranty to professional text if still the old one-liner
   const settings = database
     .prepare('SELECT warranty_text FROM business_settings WHERE id = 1')
@@ -269,6 +282,15 @@ function applyInlineSchema(database: Database.Database): void {
       order_id INTEGER NOT NULL UNIQUE REFERENCES orders(id),
       issued_at TEXT NOT NULL DEFAULT (datetime('now')),
       pdf_path TEXT DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category TEXT NOT NULL DEFAULT 'Tjetër',
+      description TEXT NOT NULL DEFAULT '',
+      amount REAL NOT NULL DEFAULT 0,
+      expense_date TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
 }

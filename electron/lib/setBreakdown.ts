@@ -245,16 +245,23 @@ export function inventoryLineValue(
   setFormat: string,
   leftoverJson: string
 ): number {
-  const perSet = parseSetFormat(setFormat);
-  const seatUnitsPerSet = perSet.reduce((a, b) => a + b, 0) || 1;
-  const leftovers = parseLeftovers(leftoverJson);
-  // Leftover keys are seat sizes ("3","1"); values are counts of those pieces
-  let leftoverSeatUnits = 0;
-  for (const [size, count] of Object.entries(leftovers)) {
-    leftoverSeatUnits += Number(size) * count;
+  const setsValue = (Number(costPrice) || 0) * (Number(stockSets) || 0);
+  try {
+    const perSet = parseSetFormat(setFormat || '1');
+    const seatUnitsPerSet = perSet.reduce((a, b) => a + b, 0) || 1;
+    const leftovers = parseLeftovers(leftoverJson);
+    let leftoverSeatUnits = 0;
+    for (const [size, count] of Object.entries(leftovers)) {
+      const sizeNum = Number(size);
+      if (!Number.isFinite(sizeNum)) continue;
+      leftoverSeatUnits += sizeNum * count;
+    }
+    const leftoverValue = (costPrice / seatUnitsPerSet) * leftoverSeatUnits;
+    return setsValue + leftoverValue;
+  } catch {
+    // Invalid set_format (e.g. free text on a bedroom item) must not break the dashboard
+    return setsValue;
   }
-  const leftoverValue = (costPrice / seatUnitsPerSet) * leftoverSeatUnits;
-  return costPrice * stockSets + leftoverValue;
 }
 
 export const DEFAULT_TVSH_RATE = 0.18;

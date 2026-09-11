@@ -7,6 +7,7 @@ import { AppLayout } from './components/Layout';
 import { DashboardPage } from './pages/Dashboard';
 import { InventoryPage } from './pages/Inventory';
 import { OrdersPage } from './pages/Orders';
+import { ExpensesPage } from './pages/Expenses';
 import { InvoicePage } from './pages/Invoice';
 
 export default function App() {
@@ -16,6 +17,7 @@ export default function App() {
         <Route index element={<DashboardPage />} />
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="orders" element={<OrdersPage />} />
+        <Route path="expenses" element={<ExpensesPage />} />
         <Route path="invoices/:orderId" element={<InvoicePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

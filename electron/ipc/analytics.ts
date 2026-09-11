@@ -1,56 +1,76 @@
 // IPC handlers for dashboard analytics in HSM Furniture ERP.
-// Aggregates monthly revenue, profit, inventory worth, top sellers, and discount history.
+// Revenue and order profit count only Delivered orders; expenses reduce net profit.
 
 import { ipcMain } from 'electron';
 import { getDatabase } from '../database/db';
 import { inventoryLineValue } from '../lib/setBreakdown';
-import type { DashboardMetrics, InventoryItem, OrderStatus } from '../types';
+import type { DashboardMetrics, Expense, InventoryItem, OrderStatus } from '../types';
+
+function monthLocalStart(): string {
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+  const y = monthStart.getFullYear();
+  const m = String(monthStart.getMonth() + 1).padStart(2, '0');
+  const d = String(monthStart.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d} 00:00:00`;
+}
 
 /** Register analytics IPC channels on the main process. */
 export function registerAnalyticsHandlers(): void {
   ipcMain.handle('analytics:dashboard', (): DashboardMetrics => {
     const db = getDatabase();
+    const monthLocal = monthLocalStart();
 
-    const monthStart = new Date();
-    monthStart.setDate(1);
-    monthStart.setHours(0, 0, 0, 0);
-    // Local calendar month (avoid UTC shifting Kosovo dates into previous month)
-    const y = monthStart.getFullYear();
-    const m = String(monthStart.getMonth() + 1).padStart(2, '0');
-    const d = String(monthStart.getDate()).padStart(2, '0');
-    const monthLocal = `${y}-${m}-${d} 00:00:00`;
+    // Only Delivered orders count. Use delivery date for the month (fallback: order_date).
+    const deliveredMonthFilter = `status = 'Delivered' AND COALESCE(delivered_at, order_date) >= ?`;
 
     const revenueRow = db
       .prepare(
-        `SELECT COALESCE(SUM(total), 0) AS revenue,
+        `SELECT COALESCE(SUM(subtotal), 0) AS revenue,
                 COALESCE(SUM(net_profit), 0) AS profit,
                 COALESCE(SUM(CASE WHEN discount_total > 0 THEN discount_total ELSE 0 END), 0) AS discount
          FROM orders
-         WHERE status != 'Returned' AND order_date >= ?`
+         WHERE ${deliveredMonthFilter}`
       )
       .get(monthLocal) as { revenue: number; profit: number; discount: number };
 
+    const expenseRow = db
+      .prepare(
+        `SELECT COALESCE(SUM(amount), 0) AS total
+         FROM expenses
+         WHERE expense_date >= ?`
+      )
+      .get(monthLocal) as { total: number };
+
+    const monthlyExpenses = expenseRow.total || 0;
+    const orderProfit = revenueRow.profit || 0;
+
     const inventoryRows = db
       .prepare(
-        `SELECT cost_price, stock_sets, set_format, leftover_pieces
+        `SELECT cost_price, stock_sets, set_format, leftover_pieces, name
          FROM inventory_items WHERE is_active = 1`
       )
       .all() as Array<
-      Pick<InventoryItem, 'cost_price' | 'stock_sets' | 'set_format' | 'leftover_pieces'>
+      Pick<InventoryItem, 'cost_price' | 'stock_sets' | 'set_format' | 'leftover_pieces' | 'name'>
     >;
 
-    // Complete sets at cost plus pro-rata leftover piece value
-    const inventoryWorth = inventoryRows.reduce(
-      (sum, row) =>
-        sum +
-        inventoryLineValue(
-          row.cost_price,
-          row.stock_sets,
-          row.set_format,
-          row.leftover_pieces
-        ),
-      0
-    );
+    const inventoryWorth = inventoryRows.reduce((sum, row) => {
+      try {
+        return (
+          sum +
+          inventoryLineValue(
+            row.cost_price,
+            row.stock_sets,
+            row.set_format,
+            row.leftover_pieces
+          )
+        );
+      } catch (err) {
+        console.error('[analytics] inventory worth skip:', row.name, err);
+        return sum + (Number(row.cost_price) || 0) * (Number(row.stock_sets) || 0);
+      }
+    }, 0);
 
     const topSellingSets = db
       .prepare(
@@ -59,14 +79,14 @@ export function registerAnalyticsHandlers(): void {
                 SUM(oi.line_total) AS revenue
          FROM order_items oi
          JOIN orders o ON o.id = oi.order_id
-         WHERE o.status != 'Returned'
+         WHERE o.status = 'Delivered'
+           AND COALESCE(o.delivered_at, o.order_date) >= ?
          GROUP BY oi.item_name
          ORDER BY qty DESC
          LIMIT 5`
       )
-      .all() as Array<{ name: string; qty: number; revenue: number }>;
+      .all(monthLocal) as Array<{ name: string; qty: number; revenue: number }>;
 
-    // Pending deliveries first, then delivered, then returned
     const deliveries = db
       .prepare(
         `SELECT o.order_number, c.name AS customer_name, o.status,
@@ -112,21 +132,35 @@ export function registerAnalyticsHandlers(): void {
          FROM order_items oi
          JOIN orders o ON o.id = oi.order_id
          JOIN customers c ON c.id = o.customer_id
-         WHERE oi.discount_amount > 0 AND o.status != 'Returned'
-         ORDER BY o.order_date DESC
+         WHERE oi.discount_amount > 0
+           AND o.status = 'Delivered'
+           AND COALESCE(o.delivered_at, o.order_date) >= ?
+         ORDER BY COALESCE(o.delivered_at, o.order_date) DESC
          LIMIT 30`
       )
-      .all() as DashboardMetrics['discountLog'];
+      .all(monthLocal) as DashboardMetrics['discountLog'];
+
+    const recentExpensesList = db
+      .prepare(
+        `SELECT * FROM expenses
+         WHERE expense_date >= ?
+         ORDER BY expense_date DESC, id DESC
+         LIMIT 20`
+      )
+      .all(monthLocal) as Expense[];
 
     return {
       monthlyRevenue: revenueRow.revenue,
-      netProfit: revenueRow.profit,
+      orderProfit,
+      monthlyExpenses,
+      netProfit: orderProfit - monthlyExpenses,
       monthlyDiscount: revenueRow.discount,
       inventoryWorth,
       topSellingSets,
       deliveries,
       returnedItems,
       discountLog,
+      recentExpenses: recentExpensesList,
     };
   });
 }

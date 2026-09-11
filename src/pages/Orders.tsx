@@ -1,12 +1,12 @@
 /**
- * Orders and sales page: create orders with fair-price / discount logic,
+ * Orders and sales page: multi-line create/edit with fair-price / discount logic,
  * preview set breakdowns, update delivery status, and manage profit / invoice links.
  *
- * Major blocks: load, pricing preview, form submit, status updates, table rendering.
+ * Major blocks: load, line drafts, pricing preview, form submit, status updates, table.
  */
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Eye, FileText, MoreVertical, Plus, Search } from 'lucide-react';
+import { Eye, FileText, MoreVertical, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 import { SetBreakdownWarning } from '../components/SetBreakdownWarning';
 import { ProductThumb } from '../components/ProductThumb';
 import { formatDate, formatEuro, hasErpBridge } from '../lib/format';
@@ -27,6 +27,17 @@ import type {
 } from '../../electron/types';
 
 type OrderTab = 'pending' | 'delivered' | 'returned';
+
+type LineDraft = {
+  key: string;
+  inventory_item_id: number;
+  item_name: string;
+  set_format_requested: string;
+  quantity: number;
+  entitled_price: number;
+  unit_price: number;
+  unit_cost: number;
+};
 
 const TAB_META: Record<
   OrderTab,
@@ -49,11 +60,77 @@ const TAB_META: Record<
   },
 };
 
+let lineKeySeq = 0;
+function nextLineKey(): string {
+  lineKeySeq += 1;
+  return `line-${Date.now()}-${lineKeySeq}`;
+}
+
+function emptyStockLine(item?: InventoryItem): LineDraft {
+  if (!item) {
+    return {
+      key: nextLineKey(),
+      inventory_item_id: 0,
+      item_name: '',
+      set_format_requested: '3-3-1',
+      quantity: 1,
+      entitled_price: 0,
+      unit_price: 0,
+      unit_cost: 0,
+    };
+  }
+  let fair = item.selling_price;
+  try {
+    fair = suggestUnitPrice(item.selling_price, item.set_format, item.set_format).entitled;
+  } catch {
+    fair = item.selling_price;
+  }
+  return {
+    key: nextLineKey(),
+    inventory_item_id: item.id,
+    item_name: item.name,
+    set_format_requested: item.set_format,
+    quantity: 1,
+    entitled_price: fair,
+    unit_price: fair,
+    unit_cost: 0,
+  };
+}
+
+function emptyCustomLine(): LineDraft {
+  return {
+    key: nextLineKey(),
+    inventory_item_id: 0,
+    item_name: '',
+    set_format_requested: '',
+    quantity: 1,
+    entitled_price: 0,
+    unit_price: 0,
+    unit_cost: 0,
+  };
+}
+
 /** Left-border + background tint by delivery status for the orders table. */
 function rowTone(status: OrderStatus): string {
   if (status === 'Delivered') return 'bg-emerald-50/90 border-l-4 border-l-emerald-500';
   if (status === 'Pending Delivery') return 'bg-amber-50/90 border-l-4 border-l-amber-400';
   return 'bg-white border-l-4 border-l-ink-200';
+}
+
+function lineCostForDraft(line: LineDraft, items: InventoryItem[], isCustomJob: boolean): number {
+  if (isCustomJob) {
+    return (Number(line.unit_cost) || 0) * line.quantity;
+  }
+  const inv = items.find((i) => i.id === line.inventory_item_id);
+  if (!inv) return 0;
+  try {
+    return (
+      suggestUnitPrice(inv.cost_price, inv.set_format, line.set_format_requested).entitled *
+      line.quantity
+    );
+  } catch {
+    return inv.cost_price * line.quantity;
+  }
 }
 
 export function OrdersPage() {
@@ -65,13 +142,12 @@ export function OrdersPage() {
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState<OrderTab>('pending');
   const [menuOpenId, setMenuOpenId] = useState<number | null>(null);
-  const [priceManual, setPriceManual] = useState(false);
-  const [fairManual, setFairManual] = useState(false);
   const [profitManual, setProfitManual] = useState(false);
   const [manualProfit, setManualProfit] = useState<number | null>(null);
   const [breakdownPreview, setBreakdownPreview] = useState<SetBreakdownPreview | null>(
     null
   );
+  const [editingOrderId, setEditingOrderId] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   const [customerForm, setCustomerForm] = useState({
@@ -85,81 +161,48 @@ export function OrdersPage() {
   const [useNewCustomer, setUseNewCustomer] = useState(true);
   const [customerId, setCustomerId] = useState<number | ''>('');
 
-  const [orderForm, setOrderForm] = useState({
-    inventory_item_id: 0,
-    custom_item_name: '',
-    set_format_requested: '3-3-1',
-    quantity: 1,
-    entitled_price: 0,
-    unit_price: 0,
-    unit_cost: 0,
-    kapare: 0,
-    transport_fee: 0,
-    show_transport_on_invoice: true,
-    is_custom_job: false,
-    custom_notes: '',
-  });
+  const [isCustomJob, setIsCustomJob] = useState(false);
+  const [kapare, setKapare] = useState(0);
+  const [transportFee, setTransportFee] = useState(0);
+  const [showTransportOnInvoice, setShowTransportOnInvoice] = useState(true);
+  const [customNotes, setCustomNotes] = useState('');
+  const [lines, setLines] = useState<LineDraft[]>([emptyCustomLine()]);
+  /** Per-line locks: fair / sell price edited by hand */
+  const [fairManualKeys, setFairManualKeys] = useState<Record<string, boolean>>({});
+  const [priceManualKeys, setPriceManualKeys] = useState<Record<string, boolean>>({});
 
-  const selectedItem = items.find((i) => i.id === orderForm.inventory_item_id);
-  const catalogPrice = selectedItem?.selling_price ?? 0;
-
-  // --- Pricing preview (fair price vs true customer discount) ---
-  const priceHint = useMemo(() => {
-    if (!selectedItem) return null;
-    try {
-      return suggestUnitPrice(
-        catalogPrice,
-        selectedItem.set_format,
-        orderForm.set_format_requested
-      );
-    } catch {
-      return null;
-    }
-  }, [selectedItem, catalogPrice, orderForm.set_format_requested]);
-
-  const entitledPrice = priceHint?.entitled ?? catalogPrice;
-  // Discount only when sell price is below fair/entitled price.
-  const trueDiscount = customerDiscount(
-    orderForm.entitled_price || entitledPrice,
-    orderForm.unit_price,
-    orderForm.quantity
+  const calculatedRevenue = useMemo(
+    () => lines.reduce((sum, line) => sum + line.unit_price * line.quantity, 0),
+    [lines]
   );
 
-  // Proportional cost for warehouse sales; custom jobs use the manual unit_cost field.
-  const calculatedCost = useMemo(() => {
-    if (orderForm.is_custom_job) {
-      return (Number(orderForm.unit_cost) || 0) * orderForm.quantity;
-    }
-    if (!selectedItem) return 0;
-    try {
-      return (
-        suggestUnitPrice(
-          selectedItem.cost_price,
-          selectedItem.set_format,
-          orderForm.set_format_requested
-        ).entitled * orderForm.quantity
-      );
-    } catch {
-      return selectedItem.cost_price * orderForm.quantity;
-    }
-  }, [
-    orderForm.is_custom_job,
-    orderForm.unit_cost,
-    selectedItem,
-    orderForm.set_format_requested,
-    orderForm.quantity,
-  ]);
+  const calculatedCost = useMemo(
+    () => lines.reduce((sum, line) => sum + lineCostForDraft(line, items, isCustomJob), 0),
+    [lines, items, isCustomJob]
+  );
 
-  const calculatedRevenue = orderForm.unit_price * orderForm.quantity;
+  const trueDiscount = useMemo(
+    () =>
+      lines.reduce(
+        (sum, line) =>
+          sum +
+          customerDiscount(
+            line.entitled_price || line.unit_price,
+            line.unit_price,
+            line.quantity
+          ),
+        0
+      ),
+    [lines]
+  );
+
   // Transport is paid by the client; it is not a shop expense and does not reduce profit
   const calculatedProfit = calculatedRevenue - calculatedCost;
   const displayProfit = profitManual && manualProfit !== null ? manualProfit : calculatedProfit;
 
-  // Keep manual profit field in sync unless the user overrode it.
   useEffect(() => {
     if (!profitManual) setManualProfit(calculatedProfit);
   }, [calculatedProfit, profitManual]);
-
 
   const filteredOrders = useMemo(() => {
     const status = TAB_META[tab].status;
@@ -185,33 +228,88 @@ export function OrdersPage() {
     [orders]
   );
 
-  /**
-   * Fill fair and/or sell price from suggestUnitPrice unless the user locked them.
-   * `force` bypasses both manual locks (e.g. after picking a new inventory item).
-   */
-  function applySuggestedPrice(
-    item: InventoryItem,
-    format: string,
-    force = false
-  ) {
-    if (priceManual && fairManual && !force) return;
+  function updateLine(key: string, patch: Partial<LineDraft>) {
+    setLines((prev) => prev.map((line) => (line.key === key ? { ...line, ...patch } : line)));
+  }
+
+  function applySuggestedPrice(lineKey: string, item: InventoryItem, format: string, force = false) {
+    const fairLocked = fairManualKeys[lineKey];
+    const priceLocked = priceManualKeys[lineKey];
+    if (fairLocked && priceLocked && !force) return;
     try {
       const s = suggestUnitPrice(item.selling_price, item.set_format, format);
-      setOrderForm((f) => ({
-        ...f,
-        entitled_price: fairManual ? f.entitled_price : s.entitled,
-        unit_price: priceManual ? f.unit_price : s.entitled,
-      }));
+      setLines((prev) =>
+        prev.map((line) => {
+          if (line.key !== lineKey) return line;
+          return {
+            ...line,
+            entitled_price: fairLocked && !force ? line.entitled_price : s.entitled,
+            unit_price: priceLocked && !force ? line.unit_price : s.entitled,
+          };
+        })
+      );
     } catch {
-      setOrderForm((f) => ({
-        ...f,
-        entitled_price: fairManual ? f.entitled_price : item.selling_price,
-        unit_price: priceManual ? f.unit_price : item.selling_price,
-      }));
+      setLines((prev) =>
+        prev.map((line) => {
+          if (line.key !== lineKey) return line;
+          return {
+            ...line,
+            entitled_price: fairLocked && !force ? line.entitled_price : item.selling_price,
+            unit_price: priceLocked && !force ? line.unit_price : item.selling_price,
+          };
+        })
+      );
     }
   }
 
-  // --- Load ---
+  function addLine() {
+    setLines((prev) => [
+      ...prev,
+      isCustomJob ? emptyCustomLine() : emptyStockLine(items[0]),
+    ]);
+  }
+
+  function removeLine(key: string) {
+    setLines((prev) => (prev.length <= 1 ? prev : prev.filter((line) => line.key !== key)));
+  }
+
+  function resetFormMeta() {
+    setEditingOrderId(null);
+    setKapare(0);
+    setTransportFee(0);
+    setShowTransportOnInvoice(true);
+    setCustomNotes('');
+    setUseNewCustomer(true);
+    setCustomerId('');
+    setCustomerForm({
+      name: '',
+      phone1: '',
+      phone2: '',
+      delivery_address: '',
+      city: 'Prishtinë',
+      country: 'Kosovë',
+    });
+    setFairManualKeys({});
+    setPriceManualKeys({});
+    setProfitManual(false);
+    setManualProfit(null);
+    setBreakdownPreview(null);
+  }
+
+  function openNewStockOrder() {
+    resetFormMeta();
+    setIsCustomJob(false);
+    setLines([emptyStockLine(items[0])]);
+    setShowForm(true);
+  }
+
+  function openNewCustomOrder() {
+    resetFormMeta();
+    setIsCustomJob(true);
+    setLines([emptyCustomLine()]);
+    setShowForm(true);
+  }
+
   async function load() {
     if (!hasErpBridge()) {
       setError('Ura e Electron nuk është aktive - hapni me npm run electron:dev');
@@ -225,34 +323,6 @@ export function OrdersPage() {
     setOrders(o);
     setCustomers(c);
     setItems(i);
-    if (i[0]) {
-      setOrderForm((f) => {
-        const id = f.inventory_item_id || i[0].id;
-        const item = i.find((x) => x.id === id) || i[0];
-        const format = f.set_format_requested || item.set_format;
-        let unit = f.unit_price;
-        let fair = f.entitled_price;
-        let suggested = item.selling_price;
-        try {
-          suggested = suggestUnitPrice(item.selling_price, item.set_format, format).entitled;
-        } catch {
-          suggested = item.selling_price;
-        }
-        if (!f.inventory_item_id || !f.unit_price) {
-          unit = suggested;
-        }
-        if (!f.inventory_item_id || !f.entitled_price) {
-          fair = suggested;
-        }
-        return {
-          ...f,
-          inventory_item_id: id,
-          set_format_requested: format,
-          entitled_price: fair,
-          unit_price: unit,
-        };
-      });
-    }
   }
 
   useEffect(() => {
@@ -261,7 +331,6 @@ export function OrdersPage() {
     );
   }, []);
 
-  // Close the per-row actions menu when clicking outside.
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!menuRef.current?.contains(e.target as Node)) {
@@ -272,10 +341,10 @@ export function OrdersPage() {
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
 
-  /** Dry-run stock impact for warehouse sales only (custom jobs skip stock). */
+  /** Dry-run stock impact for the first warehouse line (custom jobs skip stock). */
   async function previewLine() {
-    if (!hasErpBridge() || !orderForm.inventory_item_id) return;
-    if (orderForm.is_custom_job) {
+    if (!hasErpBridge()) return;
+    if (isCustomJob) {
       setBreakdownPreview({
         brokeSet: false,
         warning: null,
@@ -283,20 +352,73 @@ export function OrdersPage() {
         message:
           'Punë e personalizuar: stoku i seteve të plota në magazinë nuk ndryshon. Porosia porositet ndryshe.',
         setsConsumed: 0,
-        stockSetsAfter: selectedItem?.stock_sets ?? 0,
+        stockSetsAfter: 0,
         leftoverAfter: {},
       });
       return;
     }
+    const first = lines.find((l) => l.inventory_item_id);
+    if (!first?.inventory_item_id) return;
     const result = await window.erp.inventory.previewBreakdown({
-      inventory_item_id: orderForm.inventory_item_id,
-      set_format_requested: orderForm.set_format_requested,
-      quantity: orderForm.quantity,
+      inventory_item_id: first.inventory_item_id,
+      set_format_requested: first.set_format_requested,
+      quantity: first.quantity,
     });
     setBreakdownPreview(result);
   }
 
-  // --- Form submit (create customer if needed, then order) ---
+  async function startEdit(orderId: number) {
+    if (!hasErpBridge()) return;
+    setMenuOpenId(null);
+    setError(null);
+    try {
+      const detail = await window.erp.orders.get(orderId);
+      const order = detail.order;
+      if (order.status !== 'Pending Delivery') {
+        setError('Porosia mund të ndryshohet vetëm kur statusi është Në pritje');
+        return;
+      }
+      const orderItems = detail.items;
+      const custom = Boolean(order.is_custom_job);
+
+      setEditingOrderId(order.id);
+      setIsCustomJob(custom);
+      setKapare(order.kapare || 0);
+      setTransportFee(order.transport_fee || 0);
+      setShowTransportOnInvoice(Boolean(order.show_transport_on_invoice));
+      setCustomNotes(order.custom_notes || '');
+      setUseNewCustomer(false);
+      setCustomerId(order.customer_id);
+      setProfitManual(true);
+      setManualProfit(order.net_profit);
+      setBreakdownPreview(null);
+
+      const drafts: LineDraft[] =
+        orderItems.length > 0
+          ? orderItems.map((oi) => ({
+              key: nextLineKey(),
+              inventory_item_id: oi.inventory_item_id || 0,
+              item_name: oi.item_name || '',
+              set_format_requested: oi.set_format_requested || '',
+              quantity: oi.quantity || 1,
+              entitled_price: oi.list_price ?? oi.unit_price,
+              unit_price: oi.unit_price,
+              unit_cost: oi.unit_cost || 0,
+            }))
+          : [custom ? emptyCustomLine() : emptyStockLine(items[0])];
+
+      setLines(drafts);
+      const locked: Record<string, boolean> = {};
+      for (const d of drafts) locked[d.key] = true;
+      setFairManualKeys(locked);
+      setPriceManualKeys(locked);
+      setShowForm(true);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nuk u ngarkua porosia');
+    }
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!hasErpBridge()) return;
@@ -309,37 +431,42 @@ export function OrdersPage() {
       }
       if (!cid) throw new Error('Zgjidhni ose krijoni një klient');
 
-      const order = await window.erp.orders.create({
+      const payloadItems = lines.map((line) =>
+        isCustomJob
+          ? {
+              inventory_item_id: null as number | null,
+              item_name: line.item_name.trim(),
+              set_format_requested:
+                line.set_format_requested.trim() || 'punë e personalizuar',
+              quantity: line.quantity,
+              unit_price: Number(line.unit_price),
+              unit_cost: Number(line.unit_cost),
+              entitled_price: Number(line.entitled_price || line.unit_price),
+            }
+          : {
+              inventory_item_id: line.inventory_item_id,
+              set_format_requested: line.set_format_requested,
+              quantity: line.quantity,
+              entitled_price: Number(line.entitled_price),
+              unit_price: Number(line.unit_price),
+            }
+      );
+
+      const shared = {
         customer_id: Number(cid),
-        kapare: Number(orderForm.kapare),
-        transport_fee: Number(orderForm.transport_fee),
-        show_transport_on_invoice: orderForm.show_transport_on_invoice,
-        is_custom_job: orderForm.is_custom_job,
-        custom_notes: orderForm.custom_notes,
+        kapare: Number(kapare),
+        transport_fee: Number(transportFee),
+        show_transport_on_invoice: showTransportOnInvoice,
+        is_custom_job: isCustomJob,
+        custom_notes: customNotes,
         net_profit: Number(displayProfit),
-        items: orderForm.is_custom_job
-          ? [
-              {
-                inventory_item_id: null,
-                item_name: orderForm.custom_item_name.trim(),
-                set_format_requested:
-                  orderForm.set_format_requested.trim() || 'punë e personalizuar',
-                quantity: orderForm.quantity,
-                unit_price: Number(orderForm.unit_price),
-                unit_cost: Number(orderForm.unit_cost),
-                entitled_price: Number(orderForm.unit_price),
-              },
-            ]
-          : [
-              {
-                inventory_item_id: orderForm.inventory_item_id,
-                set_format_requested: orderForm.set_format_requested,
-                quantity: orderForm.quantity,
-                entitled_price: Number(orderForm.entitled_price || entitledPrice),
-                unit_price: Number(orderForm.unit_price),
-              },
-            ],
-      });
+        items: payloadItems,
+      };
+
+      const order =
+        editingOrderId != null
+          ? await window.erp.orders.update({ ...shared, order_id: editingOrderId })
+          : await window.erp.orders.create(shared);
 
       if (order.set_break_warning) {
         setBreakdownPreview({
@@ -356,18 +483,20 @@ export function OrdersPage() {
       }
 
       setShowForm(false);
-      setPriceManual(false);
-      setFairManual(false);
-      setProfitManual(false);
-      setManualProfit(null);
+      resetFormMeta();
       setTab('pending');
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nuk u krijua porosia');
+      setError(
+        err instanceof Error
+          ? err.message
+          : editingOrderId
+            ? 'Nuk u përditësua porosia'
+            : 'Nuk u krijua porosia'
+      );
     }
   }
 
-  // --- Status updates (also switches the active tab) ---
   async function updateStatus(orderId: number, status: OrderStatus) {
     if (!hasErpBridge()) return;
     await window.erp.orders.updateStatus({ order_id: orderId, status });
@@ -390,7 +519,6 @@ export function OrdersPage() {
     }
   }
 
-  /** Permanent delete; backend restores inventory stock. */
   async function deleteOrder(orderId: number) {
     if (!hasErpBridge()) return;
     const ok = window.confirm(
@@ -417,51 +545,11 @@ export function OrdersPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={() => {
-              setOrderForm((f) => ({
-                ...f,
-                is_custom_job: false,
-                custom_item_name: '',
-                set_format_requested: '3-3-1',
-                unit_cost: 0,
-              }));
-              setShowForm(true);
-              setBreakdownPreview(null);
-              setPriceManual(false);
-              setFairManual(false);
-              setProfitManual(false);
-              setManualProfit(null);
-            }}
-          >
+          <button type="button" className="btn-primary" onClick={openNewStockOrder}>
             <Plus size={16} />
             Porosi nga stoku
           </button>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => {
-              setOrderForm((f) => ({
-                ...f,
-                is_custom_job: true,
-                inventory_item_id: 0,
-                custom_item_name: '',
-                set_format_requested: '',
-                entitled_price: 0,
-                unit_price: 0,
-                unit_cost: 0,
-                quantity: 1,
-              }));
-              setShowForm(true);
-              setBreakdownPreview(null);
-              setPriceManual(true);
-              setFairManual(true);
-              setProfitManual(false);
-              setManualProfit(null);
-            }}
-          >
+          <button type="button" className="btn-secondary" onClick={openNewCustomOrder}>
             <Plus size={16} />
             Punë e personalizuar
           </button>
@@ -519,19 +607,22 @@ export function OrdersPage() {
         </div>
       )}
 
-      {/* New-order form: customer + line item + pricing + payment fields */}
       {showForm && (
         <form onSubmit={onSubmit} className="panel space-y-6 p-5">
           <div className="rounded-lg border border-ink-200 bg-ink-50 px-4 py-3">
             <h3 className="text-lg font-semibold text-ink-950">
-              {orderForm.is_custom_job
-                ? 'Punë e personalizuar (custom job)'
-                : 'Porosi nga stoku i magazinës'}
+              {editingOrderId
+                ? isCustomJob
+                  ? 'Ndrysho punën e personalizuar'
+                  : 'Ndrysho porosinë nga stoku'
+                : isCustomJob
+                  ? 'Punë e personalizuar (custom job)'
+                  : 'Porosi nga stoku i magazinës'}
             </h3>
             <p className="mt-1 text-sm text-ink-600">
-              {orderForm.is_custom_job
+              {isCustomJob
                 ? 'Çdo punë jashtë seteve standarde të magazinës: kënde me metra, masa speciale, porosi të porositura, etj. Stoku i seteve të plota nuk preket.'
-                : 'Heq nga stoku i seteve të plota. Formati tipik i setit: 3-3-1.'}
+                : 'Heq nga stoku i seteve të plota. Formati tipik i setit: 3-3-1. Mund të shtoni disa artikuj.'}
             </p>
           </div>
 
@@ -541,6 +632,7 @@ export function OrdersPage() {
                 type="radio"
                 checked={useNewCustomer}
                 onChange={() => setUseNewCustomer(true)}
+                disabled={editingOrderId != null}
               />
               Klient i ri
             </label>
@@ -638,355 +730,423 @@ export function OrdersPage() {
             </div>
           )}
 
-          {orderForm.is_custom_job ? (
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <div className="field md:col-span-2 xl:col-span-3">
-                <label>Emri / përshkrimi i punës</label>
-                <input
-                  className="input"
-                  required
-                  value={orderForm.custom_item_name}
-                  onChange={(e) =>
-                    setOrderForm({ ...orderForm, custom_item_name: e.target.value })
-                  }
-                  placeholder="P.sh. Kënd divani 3.2-3.2, tavolinë speciale, karrike me masa…"
-                />
-              </div>
-              <div className="field">
-                <label>Sasia</label>
-                <input
-                  type="number"
-                  min={1}
-                  className="input"
-                  value={orderForm.quantity}
-                  onChange={(e) =>
-                    setOrderForm({ ...orderForm, quantity: Number(e.target.value) })
-                  }
-                />
-              </div>
-              <div className="field md:col-span-2 xl:col-span-4">
-                <label>Specifikime / dimensione (opsionale)</label>
-                <input
-                  className="input"
-                  value={orderForm.set_format_requested}
-                  onChange={(e) =>
-                    setOrderForm({
-                      ...orderForm,
-                      set_format_requested: e.target.value,
-                    })
-                  }
-                  placeholder="Çfarëdo: 3.2-3.2 m, 200x90 cm, ngjyra, materiali…"
-                />
-                <p className="mt-1 text-[11px] text-ink-500">
-                  Nuk është e detyrueshme të jetë format seti. Shkruani çfarë i duhet klientit.
-                </p>
-              </div>
-              <div className="field">
-                <label>Kostoja juaj (€)</label>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  className="input"
-                  required
-                  value={orderForm.unit_cost}
-                  onChange={(e) =>
-                    setOrderForm({ ...orderForm, unit_cost: Number(e.target.value) })
-                  }
-                />
-              </div>
-              <div className="field">
-                <label>Çmimi i shitjes (€)</label>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  className="input"
-                  required
-                  value={orderForm.unit_price}
-                  onChange={(e) =>
-                    setOrderForm({ ...orderForm, unit_price: Number(e.target.value) })
-                  }
-                />
-              </div>
-              <div className="field md:col-span-2">
-                <label>Fitimi i llogaritur</label>
-                <p className="input flex items-center bg-ink-50 font-semibold text-brand-800">
-                  {formatEuro(displayProfit)}
-                </p>
-                <p className="mt-1 text-[11px] text-ink-500">
-                  Shitja - kostoja (transporti e paguan klienti, nuk ul fitimin).
-                </p>
-              </div>
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-sm font-semibold text-ink-900">Artikujt e porosisë</h4>
+              <button type="button" className="btn-secondary !py-1.5 text-xs" onClick={addLine}>
+                <Plus size={14} />
+                Shto artikull
+              </button>
             </div>
-          ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div className="field md:col-span-2">
-              <label>Artikulli nga inventari</label>
-              <div className="flex items-start gap-3">
-                {selectedItem && (
-                  <ProductThumb
-                    imagePath={selectedItem.image_path}
-                    itemId={selectedItem.id}
-                    alt={selectedItem.name}
-                    size={56}
-                    className="mt-0.5"
-                  />
-                )}
-                <div className="min-w-0 flex-1">
-              <select
-                className="input"
-                required={!orderForm.is_custom_job}
-                value={orderForm.inventory_item_id}
-                onChange={(e) => {
-                  const id = Number(e.target.value);
-                  const item = items.find((x) => x.id === id);
-                  if (!item) return;
-                  setPriceManual(false);
-                  setFairManual(false);
-                  const format = item.set_format;
-                  const fair = suggestUnitPrice(
-                    item.selling_price,
-                    item.set_format,
-                    format
-                  ).entitled;
-                  setOrderForm({
-                    ...orderForm,
-                    inventory_item_id: id,
-                    set_format_requested: format,
-                    entitled_price: fair,
-                    unit_price: fair,
-                  });
-                }}
-              >
-                <option value={0}>Zgjidhni…</option>
-                {items.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} · {item.set_format} · {item.stock_sets} sete të plota
-                    {item.leftover_pieces ? ' + mbetje' : ''}
-                    {item.category_name ? ` · ${item.category_name}` : ''}
-                  </option>
-                ))}
-              </select>
-              {selectedItem?.notes && (
-                <p className="mt-1 text-xs text-ink-500">{selectedItem.notes}</p>
-              )}
-                </div>
-              </div>
-            </div>
-            <div className="field">
-              <label>Formati i kërkuar i setit</label>
-              <input
-                className="input font-mono"
-                required
-                value={orderForm.set_format_requested}
-                onChange={(e) => {
-                  const format = e.target.value;
-                  setOrderForm((f) => ({ ...f, set_format_requested: format }));
-                  if (selectedItem) applySuggestedPrice(selectedItem, format);
-                }}
-                onBlur={() => {
-                  if (selectedItem) {
-                    applySuggestedPrice(selectedItem, orderForm.set_format_requested);
-                    previewLine().catch(() => undefined);
-                  }
-                }}
-                placeholder="3-3-1"
-              />
-            </div>
-            <div className="field">
-              <label>Sasia</label>
-              <input
-                type="number"
-                min={1}
-                className="input"
-                value={orderForm.quantity}
-                onChange={(e) =>
-                  setOrderForm({ ...orderForm, quantity: Number(e.target.value) })
-                }
-              />
-            </div>
-          </div>
-          )}
 
-          {/* Pricing panel: catalog vs fair vs sell price, discount, profit (warehouse sales only) */}
-          {!orderForm.is_custom_job && (
-          <div className="rounded-xl border border-ink-200 bg-ink-50/80 p-4">
-            <h3 className="text-sm font-semibold text-ink-900">
-              Çmimi i justë vs zbritja e klientit
-            </h3>
-            <p className="mt-1 text-xs text-ink-600">
-              Nëse klienti merr set më të vogël (p.sh. 3-1 nga 3-3-1), çmimi ulet sepse ashtu
-              vlen ai kombinim - kjo nuk është zbritje. Zbritja është vetëm kur e shitni më lirë
-              se çmimi i justë (favor për klientin).
-            </p>
-            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <div className="field">
-                <label>Çmimi i setit të plotë (inventar)</label>
-                <input
-                  className="input bg-white"
-                  disabled
-                  value={formatEuro(catalogPrice)}
-                />
-              </div>
-              <div className="field">
-                <label>Çmimi i justë për këtë format</label>
-                <div className="flex gap-2">
-                  <input
-                    className="input bg-white"
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={orderForm.entitled_price || entitledPrice}
-                    onChange={(e) => {
-                      setFairManual(true);
-                      setOrderForm((f) => ({
-                        ...f,
-                        entitled_price: Number(e.target.value),
-                      }));
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="btn-secondary shrink-0 !px-3"
-                    onClick={() => {
-                      const fair = entitledPrice;
-                      setFairManual(false);
-                      setPriceManual(false);
-                      setOrderForm((f) => ({
-                        ...f,
-                        entitled_price: fair,
-                        unit_price: fair,
-                      }));
-                    }}
-                  >
-                    Përdor
-                  </button>
+            {lines.map((line, index) => {
+              const selectedItem = items.find((i) => i.id === line.inventory_item_id);
+              const catalogPrice = selectedItem?.selling_price ?? 0;
+              let priceHint: ReturnType<typeof suggestUnitPrice> | null = null;
+              if (selectedItem) {
+                try {
+                  priceHint = suggestUnitPrice(
+                    catalogPrice,
+                    selectedItem.set_format,
+                    line.set_format_requested
+                  );
+                } catch {
+                  priceHint = null;
+                }
+              }
+              const entitledFallback = priceHint?.entitled ?? catalogPrice;
+              const lineDiscount = customerDiscount(
+                line.entitled_price || entitledFallback,
+                line.unit_price,
+                line.quantity
+              );
+              const lineRev = line.unit_price * line.quantity;
+              const lineCost = lineCostForDraft(line, items, isCustomJob);
+
+              return (
+                <div
+                  key={line.key}
+                  className="rounded-xl border border-ink-200 bg-white p-4 space-y-3"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-ink-500">
+                      Rreshti {index + 1}
+                    </span>
+                    {lines.length > 1 && (
+                      <button
+                        type="button"
+                        className="btn-ghost !px-2 !py-1 text-accent"
+                        onClick={() => removeLine(line.key)}
+                        title="Hiq rreshtin"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+
+                  {isCustomJob ? (
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <div className="field md:col-span-2 xl:col-span-3">
+                        <label>Emri / përshkrimi i punës</label>
+                        <input
+                          className="input"
+                          required
+                          value={line.item_name}
+                          onChange={(e) => updateLine(line.key, { item_name: e.target.value })}
+                          placeholder="P.sh. Kënd divani 3.2-3.2, tavolinë speciale…"
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Sasia</label>
+                        <input
+                          type="number"
+                          min={1}
+                          className="input"
+                          value={line.quantity}
+                          onChange={(e) =>
+                            updateLine(line.key, { quantity: Number(e.target.value) })
+                          }
+                        />
+                      </div>
+                      <div className="field md:col-span-2 xl:col-span-4">
+                        <label>Specifikime / dimensione (opsionale)</label>
+                        <input
+                          className="input"
+                          value={line.set_format_requested}
+                          onChange={(e) =>
+                            updateLine(line.key, { set_format_requested: e.target.value })
+                          }
+                          placeholder="Çfarëdo: 3.2-3.2 m, 200x90 cm, ngjyra…"
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Kostoja juaj (€)</label>
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          className="input"
+                          required
+                          value={line.unit_cost}
+                          onChange={(e) =>
+                            updateLine(line.key, { unit_cost: Number(e.target.value) })
+                          }
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Çmimi i shitjes (€)</label>
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          className="input"
+                          required
+                          value={line.unit_price}
+                          onChange={(e) =>
+                            updateLine(line.key, {
+                              unit_price: Number(e.target.value),
+                              entitled_price: Number(e.target.value),
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="field md:col-span-2">
+                        <label>Fitimi i rreshtit</label>
+                        <p className="input flex items-center bg-ink-50 font-medium text-brand-800">
+                          {formatEuro(lineRev - lineCost)}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        <div className="field md:col-span-2">
+                          <label>Artikulli nga inventari</label>
+                          <div className="flex items-start gap-3">
+                            {selectedItem && (
+                              <ProductThumb
+                                imagePath={selectedItem.image_path}
+                                itemId={selectedItem.id}
+                                alt={selectedItem.name}
+                                size={56}
+                                className="mt-0.5"
+                              />
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <select
+                                className="input"
+                                required
+                                value={line.inventory_item_id}
+                                onChange={(e) => {
+                                  const id = Number(e.target.value);
+                                  const item = items.find((x) => x.id === id);
+                                  if (!item) return;
+                                  setFairManualKeys((m) => ({ ...m, [line.key]: false }));
+                                  setPriceManualKeys((m) => ({ ...m, [line.key]: false }));
+                                  const format = item.set_format;
+                                  let fair = item.selling_price;
+                                  try {
+                                    fair = suggestUnitPrice(
+                                      item.selling_price,
+                                      item.set_format,
+                                      format
+                                    ).entitled;
+                                  } catch {
+                                    fair = item.selling_price;
+                                  }
+                                  updateLine(line.key, {
+                                    inventory_item_id: id,
+                                    item_name: item.name,
+                                    set_format_requested: format,
+                                    entitled_price: fair,
+                                    unit_price: fair,
+                                  });
+                                }}
+                              >
+                                <option value={0}>Zgjidhni…</option>
+                                {items.map((item) => (
+                                  <option key={item.id} value={item.id}>
+                                    {item.name} · {item.set_format} · {item.stock_sets} sete të
+                                    plota
+                                    {item.leftover_pieces ? ' + mbetje' : ''}
+                                    {item.category_name ? ` · ${item.category_name}` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                              {selectedItem?.notes && (
+                                <p className="mt-1 text-xs text-ink-500">{selectedItem.notes}</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="field">
+                          <label>Formati i kërkuar i setit</label>
+                          <input
+                            className="input font-mono"
+                            required
+                            value={line.set_format_requested}
+                            onChange={(e) => {
+                              const format = e.target.value;
+                              const fairLocked = fairManualKeys[line.key];
+                              const priceLocked = priceManualKeys[line.key];
+                              let entitled = line.entitled_price;
+                              let unit = line.unit_price;
+                              if (selectedItem && !(fairLocked && priceLocked)) {
+                                try {
+                                  const s = suggestUnitPrice(
+                                    selectedItem.selling_price,
+                                    selectedItem.set_format,
+                                    format
+                                  );
+                                  if (!fairLocked) entitled = s.entitled;
+                                  if (!priceLocked) unit = s.entitled;
+                                } catch {
+                                  if (!fairLocked) entitled = selectedItem.selling_price;
+                                  if (!priceLocked) unit = selectedItem.selling_price;
+                                }
+                              }
+                              updateLine(line.key, {
+                                set_format_requested: format,
+                                entitled_price: entitled,
+                                unit_price: unit,
+                              });
+                            }}
+                            onBlur={() => {
+                              if (selectedItem) {
+                                applySuggestedPrice(
+                                  line.key,
+                                  selectedItem,
+                                  line.set_format_requested
+                                );
+                              }
+                            }}
+                            placeholder="3-3-1"
+                          />
+                        </div>
+                        <div className="field">
+                          <label>Sasia</label>
+                          <input
+                            type="number"
+                            min={1}
+                            className="input"
+                            value={line.quantity}
+                            onChange={(e) =>
+                              updateLine(line.key, { quantity: Number(e.target.value) })
+                            }
+                          />
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg border border-ink-100 bg-ink-50/80 p-3">
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          <div className="field">
+                            <label>Çmimi i setit të plotë</label>
+                            <input
+                              className="input bg-white"
+                              disabled
+                              value={formatEuro(catalogPrice)}
+                            />
+                          </div>
+                          <div className="field">
+                            <label>Çmimi i justë</label>
+                            <div className="flex gap-2">
+                              <input
+                                className="input bg-white"
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                value={line.entitled_price || entitledFallback}
+                                onChange={(e) => {
+                                  setFairManualKeys((m) => ({ ...m, [line.key]: true }));
+                                  updateLine(line.key, {
+                                    entitled_price: Number(e.target.value),
+                                  });
+                                }}
+                              />
+                              <button
+                                type="button"
+                                className="btn-secondary shrink-0 !px-3"
+                                onClick={() => {
+                                  const fair = entitledFallback;
+                                  setFairManualKeys((m) => ({ ...m, [line.key]: false }));
+                                  setPriceManualKeys((m) => ({ ...m, [line.key]: false }));
+                                  updateLine(line.key, {
+                                    entitled_price: fair,
+                                    unit_price: fair,
+                                  });
+                                }}
+                              >
+                                Përdor
+                              </button>
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                className="btn-ghost !px-2 !py-1 text-xs"
+                                onClick={() => {
+                                  setFairManualKeys((m) => ({ ...m, [line.key]: true }));
+                                  updateLine(line.key, {
+                                    entitled_price: roundDownToStep(
+                                      line.entitled_price || entitledFallback,
+                                      50
+                                    ),
+                                  });
+                                }}
+                              >
+                                Rrumb. poshtë 50
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-ghost !px-2 !py-1 text-xs"
+                                onClick={() => {
+                                  setFairManualKeys((m) => ({ ...m, [line.key]: true }));
+                                  updateLine(line.key, {
+                                    entitled_price: roundToNearestStep(
+                                      line.entitled_price || entitledFallback,
+                                      50
+                                    ),
+                                  });
+                                }}
+                              >
+                                Rrumb. afër 50
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-ghost !px-2 !py-1 text-xs"
+                                onClick={() => {
+                                  setFairManualKeys((m) => ({ ...m, [line.key]: true }));
+                                  updateLine(line.key, {
+                                    entitled_price: roundUpToStep(
+                                      line.entitled_price || entitledFallback,
+                                      50
+                                    ),
+                                  });
+                                }}
+                              >
+                                Rrumb. lart 50
+                              </button>
+                            </div>
+                          </div>
+                          <div className="field">
+                            <label>Çmimi final i shitjes (€)</label>
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              className="input bg-white"
+                              required
+                              value={line.unit_price}
+                              onChange={(e) => {
+                                setPriceManualKeys((m) => ({ ...m, [line.key]: true }));
+                                updateLine(line.key, { unit_price: Number(e.target.value) });
+                              }}
+                            />
+                          </div>
+                          <div className="field">
+                            <label>Zbritja e rreshtit</label>
+                            <p
+                              className={`input flex items-center bg-white font-medium ${
+                                lineDiscount > 0 ? 'text-accent' : 'text-ink-600'
+                              }`}
+                            >
+                              {lineDiscount > 0
+                                ? `−${formatEuro(lineDiscount)}`
+                                : 'Pa zbritje'}
+                            </p>
+                          </div>
+                        </div>
+                        {priceHint && (
+                          <p className="mt-2 text-xs text-ink-700">{priceHint.note}</p>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="btn-ghost !px-2 !py-1 text-xs"
-                    onClick={() =>
-                      setOrderForm((f) => ({
-                        ...f,
-                        entitled_price: roundDownToStep(f.entitled_price || entitledPrice, 50),
-                      }))
-                    }
-                  >
-                    Rrumb. poshtë 50
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-ghost !px-2 !py-1 text-xs"
-                    onClick={() =>
-                      setOrderForm((f) => ({
-                        ...f,
-                        entitled_price: roundToNearestStep(
-                          f.entitled_price || entitledPrice,
-                          50
-                        ),
-                      }))
-                    }
-                  >
-                    Rrumb. afër 50
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-ghost !px-2 !py-1 text-xs"
-                    onClick={() =>
-                      setOrderForm((f) => ({
-                        ...f,
-                        entitled_price: roundUpToStep(f.entitled_price || entitledPrice, 50),
-                      }))
-                    }
-                  >
-                    Rrumb. lart 50
-                  </button>
-                </div>
-              </div>
-              <div className="field">
-                <label>Çmimi final i shitjes (€)</label>
+              );
+            })}
+          </div>
+
+          <div className="grid gap-3 rounded-lg border border-brand-200 bg-brand-50/70 p-3 md:grid-cols-3">
+            <div className="field">
+              <label>Kostoja totale</label>
+              <input className="input bg-white" disabled value={formatEuro(calculatedCost)} />
+            </div>
+            <div className="field">
+              <label>Të ardhurat nga shitja</label>
+              <input className="input bg-white" disabled value={formatEuro(calculatedRevenue)} />
+            </div>
+            <div className="field">
+              <label>Fitimi i porosisë (€)</label>
+              <div className="flex gap-2">
                 <input
                   type="number"
-                  min={0}
                   step="0.01"
-                  className="input bg-white"
-                  required
-                  value={orderForm.unit_price}
+                  className="input bg-white font-semibold text-brand-800"
+                  value={displayProfit}
                   onChange={(e) => {
-                    setPriceManual(true);
-                    setOrderForm({
-                      ...orderForm,
-                      unit_price: Number(e.target.value),
-                    });
+                    setProfitManual(true);
+                    setManualProfit(Number(e.target.value));
                   }}
                 />
-              </div>
-              <div className="field">
-                <label>Zbritja e klientit</label>
-                <p
-                  className={`input flex items-center bg-white font-medium ${
-                    trueDiscount > 0 ? 'text-accent' : 'text-ink-600'
-                  }`}
+                <button
+                  type="button"
+                  className="btn-secondary shrink-0 !px-3 text-xs"
+                  onClick={() => {
+                    setProfitManual(false);
+                    setManualProfit(calculatedProfit);
+                  }}
                 >
-                  {trueDiscount > 0
-                    ? `−${formatEuro(trueDiscount)}`
-                    : 'Pa zbritje (çmim i justë ose më lart)'}
-                </p>
+                  Auto
+                </button>
               </div>
+              <p className="mt-1 text-[11px] text-ink-600">
+                Auto: shitja - kostoja = {formatEuro(calculatedProfit)}
+                {trueDiscount > 0 ? ` · zbritje ${formatEuro(trueDiscount)}` : ''}
+                {profitManual ? ' · (ndryshuar me dorë)' : ''}. Transporti e paguan klienti (nuk
+                ul fitimin).
+              </p>
             </div>
-
-            <div className="mt-4 grid gap-3 rounded-lg border border-brand-200 bg-brand-50/70 p-3 md:grid-cols-3">
-              <div className="field">
-                <label>Kostoja e justë (për këtë format)</label>
-                <input className="input bg-white" disabled value={formatEuro(calculatedCost)} />
-              </div>
-              <div className="field">
-                <label>Të ardhurat nga shitja</label>
-                <input
-                  className="input bg-white"
-                  disabled
-                  value={formatEuro(calculatedRevenue)}
-                />
-              </div>
-              <div className="field">
-                <label>Fitimi i kësaj porosie (€)</label>
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    step="0.01"
-                    className="input bg-white font-semibold text-brand-800"
-                    value={displayProfit}
-                    onChange={(e) => {
-                      setProfitManual(true);
-                      setManualProfit(Number(e.target.value));
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="btn-secondary shrink-0 !px-3 text-xs"
-                    onClick={() => {
-                      setProfitManual(false);
-                      setManualProfit(calculatedProfit);
-                    }}
-                  >
-                    Auto
-                  </button>
-                </div>
-                <p className="mt-1 text-[11px] text-ink-600">
-                  Auto: shitja - kostoja e justë = {formatEuro(calculatedProfit)}
-                  {profitManual ? ' · (ndryshuar me dorë)' : ''}
-                  . Transporti e paguan klienti (nuk ul fitimin).
-                </p>
-              </div>
-            </div>
-
-            {priceHint && (
-              <p className="mt-3 text-xs text-ink-700">{priceHint.note}</p>
-            )}
           </div>
-          )}
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div className="field">
@@ -996,10 +1156,8 @@ export function OrdersPage() {
                 min={0}
                 step="0.01"
                 className="input"
-                value={orderForm.kapare}
-                onChange={(e) =>
-                  setOrderForm({ ...orderForm, kapare: Number(e.target.value) })
-                }
+                value={kapare}
+                onChange={(e) => setKapare(Number(e.target.value))}
               />
             </div>
             <div className="field">
@@ -1009,13 +1167,8 @@ export function OrdersPage() {
                 min={0}
                 step="0.01"
                 className="input"
-                value={orderForm.transport_fee}
-                onChange={(e) =>
-                  setOrderForm({
-                    ...orderForm,
-                    transport_fee: Number(e.target.value),
-                  })
-                }
+                value={transportFee}
+                onChange={(e) => setTransportFee(Number(e.target.value))}
               />
               <p className="mt-1 text-[11px] text-ink-500">
                 E paguan klienti. Shtohet në totalin e faturës, jo në shpenzimet e dyqanit.
@@ -1025,42 +1178,32 @@ export function OrdersPage() {
               <label className="flex items-center gap-3 pt-6 text-sm normal-case tracking-normal">
                 <span
                   className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
-                    orderForm.show_transport_on_invoice ? 'bg-brand-600' : 'bg-ink-300'
+                    showTransportOnInvoice ? 'bg-brand-600' : 'bg-ink-300'
                   }`}
                 >
                   <input
                     type="checkbox"
                     className="peer sr-only"
-                    checked={orderForm.show_transport_on_invoice}
-                    onChange={(e) =>
-                      setOrderForm({
-                        ...orderForm,
-                        show_transport_on_invoice: e.target.checked,
-                      })
-                    }
+                    checked={showTransportOnInvoice}
+                    onChange={(e) => setShowTransportOnInvoice(e.target.checked)}
                   />
                   <span
                     className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
-                      orderForm.show_transport_on_invoice
-                        ? 'translate-x-6'
-                        : 'translate-x-1'
+                      showTransportOnInvoice ? 'translate-x-6' : 'translate-x-1'
                     }`}
                   />
                 </span>
-                Shfaq transportin në faturë:{' '}
-                {orderForm.show_transport_on_invoice ? 'PO' : 'JO'}
+                Shfaq transportin në faturë: {showTransportOnInvoice ? 'PO' : 'JO'}
               </label>
             </div>
             <div className="field md:col-span-2 xl:col-span-4">
               <label>Shënime shtesë</label>
               <textarea
                 className="input min-h-[72px]"
-                value={orderForm.custom_notes}
-                onChange={(e) =>
-                  setOrderForm({ ...orderForm, custom_notes: e.target.value })
-                }
+                value={customNotes}
+                onChange={(e) => setCustomNotes(e.target.value)}
                 placeholder={
-                  orderForm.is_custom_job
+                  isCustomJob
                     ? 'Detaje ekstra për punën e personalizuar…'
                     : 'Dimensionet e këndit / specifikimet…'
                 }
@@ -1069,20 +1212,25 @@ export function OrdersPage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            {!orderForm.is_custom_job && (
+            {!isCustomJob && (
               <button type="button" className="btn-secondary" onClick={previewLine}>
                 Parashiko ndarjen e setit
               </button>
             )}
             <button type="submit" className="btn-primary">
-              {orderForm.is_custom_job
-                ? 'Ruaj punën e personalizuar'
-                : 'Vendos porosinë'}
+              {editingOrderId
+                ? 'Ruaj ndryshimet'
+                : isCustomJob
+                  ? 'Ruaj punën e personalizuar'
+                  : 'Vendos porosinë'}
             </button>
             <button
               type="button"
               className="btn-ghost"
-              onClick={() => setShowForm(false)}
+              onClick={() => {
+                setShowForm(false);
+                resetFormMeta();
+              }}
             >
               Anulo
             </button>
@@ -1109,7 +1257,6 @@ export function OrdersPage() {
         </form>
       )}
 
-      {/* Orders table (filtered by tab + search) */}
       <div className="table-wrap">
         <table className="data">
           <thead>
@@ -1208,6 +1355,16 @@ export function OrdersPage() {
                       className="relative inline-flex items-center gap-1"
                       ref={menuOpenId === order.id ? menuRef : undefined}
                     >
+                      {order.status === 'Pending Delivery' && (
+                        <button
+                          type="button"
+                          className="btn-secondary !px-2 !py-1 text-xs"
+                          title="Ndrysho porosinë"
+                          onClick={() => startEdit(order.id)}
+                        >
+                          <Pencil size={14} />
+                        </button>
+                      )}
                       <Link
                         to={`/invoices/${order.id}`}
                         className="btn-secondary !px-2 !py-1 text-xs"
@@ -1227,6 +1384,16 @@ export function OrdersPage() {
                       </button>
                       {menuOpenId === order.id && (
                         <div className="absolute right-0 top-full z-20 mt-1 min-w-[200px] rounded-lg border border-ink-200 bg-white py-1 shadow-panel">
+                          {order.status === 'Pending Delivery' && (
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-ink-50"
+                              onClick={() => startEdit(order.id)}
+                            >
+                              <Pencil size={14} />
+                              Ndrysho
+                            </button>
+                          )}
                           <Link
                             to={`/invoices/${order.id}`}
                             className="flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-ink-50"

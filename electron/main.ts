@@ -9,6 +9,7 @@ import { registerInventoryHandlers } from './ipc/inventory';
 import { registerOrderHandlers } from './ipc/orders';
 import { registerInvoiceHandlers } from './ipc/invoices';
 import { registerAnalyticsHandlers } from './ipc/analytics';
+import { registerExpenseHandlers } from './ipc/expenses';
 
 process.env.DIST = path.join(__dirname, '../dist');
 process.env.VITE_PUBLIC = app.isPackaged
@@ -67,6 +68,7 @@ app.whenReady().then(() => {
   registerOrderHandlers();
   registerInvoiceHandlers();
   registerAnalyticsHandlers();
+  registerExpenseHandlers();
   createWindow();
 
   // macOS: recreate a window when the dock icon is clicked and none remain

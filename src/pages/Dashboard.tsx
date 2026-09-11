@@ -12,6 +12,7 @@ import {
   RotateCcw,
   Percent,
   Boxes,
+  Fuel,
 } from 'lucide-react';
 import { formatDate, formatEuro, hasErpBridge } from '../lib/format';
 import { statusLabel } from '../lib/labels';
@@ -21,12 +22,15 @@ import type { DashboardMetrics } from '../../electron/types';
 const emptyMetrics: DashboardMetrics = {
   monthlyRevenue: 0,
   netProfit: 0,
+  orderProfit: 0,
+  monthlyExpenses: 0,
   monthlyDiscount: 0,
   inventoryWorth: 0,
   topSellingSets: [],
   deliveries: [],
   returnedItems: [],
   discountLog: [],
+  recentExpenses: [],
 };
 
 export function DashboardPage() {
@@ -52,7 +56,9 @@ export function DashboardPage() {
       <div>
         <h2 className="text-3xl font-semibold text-ink-950">Pasqyra financiare</h2>
         <p className="mt-1 text-ink-600">
-          Fitimi neto = Çmimi i shitjes − Kostoja − Transporti · Vlera e inventarit sipas kostos
+          Stoku hiqet kur hapet porosia (Në pritje). Të ardhurat, fitimi dhe zbritjet
+          numërohen vetëm kur statusi është <strong>E dorëzuar</strong>. Nëse e ktheni në
+          pritje, nuk shfaqen më në panel. Kthimi rikthen stokun dhe e heq nga paneli.
         </p>
       </div>
 
@@ -74,6 +80,11 @@ export function DashboardPage() {
           label="Fitimi neto"
           value={formatEuro(metrics.netProfit)}
           accent
+        />
+        <MetricCard
+          icon={<Fuel size={18} />}
+          label="Shpenzimet mujore"
+          value={formatEuro(metrics.monthlyExpenses)}
         />
         <MetricCard
           icon={<Percent size={18} />}
@@ -98,6 +109,45 @@ export function DashboardPage() {
           value={String(metrics.returnedItems.length)}
         />
       </div>
+
+      {metrics.recentExpenses.length > 0 && (
+        <section className="panel p-5">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-semibold">Shpenzimet e muajit</h3>
+              <p className="mt-1 text-sm text-ink-600">
+                Fitimi i porosive {formatEuro(metrics.orderProfit)} - shpenzimet{' '}
+                {formatEuro(metrics.monthlyExpenses)} = neto {formatEuro(metrics.netProfit)}
+              </p>
+            </div>
+            <Link to="/expenses" className="btn-secondary text-sm">
+              Menaxho shpenzimet
+            </Link>
+          </div>
+          <div className="mt-4 table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Kategoria</th>
+                  <th>Përshkrimi</th>
+                  <th>Shuma</th>
+                  <th>Data</th>
+                </tr>
+              </thead>
+              <tbody>
+                {metrics.recentExpenses.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.category}</td>
+                    <td className="text-ink-600">{row.description || '-'}</td>
+                    <td className="font-medium">{formatEuro(row.amount)}</td>
+                    <td className="text-sm text-ink-500">{formatDate(row.expense_date)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {/* True customer discounts only (below fair price), not partial-set pricing */}
       <section className="panel p-5">
